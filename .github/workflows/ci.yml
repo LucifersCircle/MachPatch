@@ -15,6 +15,9 @@ jobs:
       - name: Show Swift version
         run: swift --version
 
+      - name: Check formatting
+        run: xcrun swift-format lint --recursive --strict Sources Tests Package.swift
+
       - name: Build
         run: swift build --build-tests
 

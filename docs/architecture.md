@@ -28,6 +28,30 @@ MachPatchPackager -> MachPatchBuilder + MachPatchVerifier + MachPatchCore
 
 The CLI will add direct dependencies on feature modules as their commands are implemented.
 
+## Input resolution
+
+`InputResolver.withResolvedTarget` owns the lifetime of temporary IPA contents. Resolution uses
+this flow:
+
+```text
+Validate input kind
+  -> create a private mode-0700 workspace
+  -> copy the IPA to a stable local snapshot
+  -> validate ZIP and ZIP64 entry metadata
+  -> reject traversal, absolute paths, and symbolic links
+  -> extract with /usr/bin/ditto using a Process argument array
+  -> locate the single Payload/*.app bundle
+  -> parse Info.plist without executing bundle content
+  -> verify the resolved file has a Mach-O magic value
+  -> stream its SHA-256
+  -> remove the workspace when the scoped operation exits
+```
+
+The private snapshot prevents the source IPA from changing between validation and extraction.
+The current ZIP validator supports bounded single-disk archives, including ZIP64 size metadata on
+individual entries. Multi-disk archives, encrypted ZIP entries, unsafe paths, special Unix file
+types, and unreasonably large expanded archives are rejected explicitly.
+
 ## Design constraints
 
 - Report unknown architecture and ABI values explicitly; never silently guess.

@@ -19,7 +19,7 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "MachPatchCLI",
-            dependencies: ["MachPatchCore"]
+            dependencies: ["MachPatchAnalyzer", "MachPatchCore"]
         ),
         .target(name: "MachPatchCore"),
         .target(
