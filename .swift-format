@@ -1,0 +1,18 @@
+{
+  "fileScopedDeclarationPrivacy": {
+    "accessLevel": "private"
+  },
+  "indentation": {
+    "spaces": 4
+  },
+  "lineLength": 100,
+  "maximumBlankLines": 1,
+  "respectsExistingLineBreaks": true,
+  "rules": {
+    "AlwaysUseLowerCamelCase": true,
+    "DoNotUseSemicolons": true,
+    "FileScopedDeclarationPrivacy": true,
+    "OrderedImports": true
+  },
+  "version": 1
+}
