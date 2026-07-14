@@ -12,6 +12,8 @@ struct MachPatchCommand {
 
         COMMANDS:
           resolve <path>         Resolve an IPA, .app, or Mach-O executable.
+          inspect <path> [--json]
+                                 Inspect every Mach-O slice and load command.
 
         OPTIONS:
           --version             Show the MachPatch version.
@@ -34,6 +36,15 @@ struct MachPatchCommand {
                 exit(EX_USAGE)
             }
             resolve(path: arguments[1])
+        case "inspect":
+            guard
+                arguments.count == 2
+                    || (arguments.count == 3 && arguments[2] == "--json")
+            else {
+                writeError("Usage: machpatch inspect <path> [--json]\n")
+                exit(EX_USAGE)
+            }
+            inspect(path: arguments[1])
         default:
             writeError("Unknown command or option: \(arguments[0])\n\n\(help)\n")
             exit(EX_USAGE)
@@ -47,15 +58,30 @@ struct MachPatchCommand {
     private static func resolve(path: String) {
         do {
             try InputResolver().withResolvedTarget(at: URL(filePath: path)) { target in
-                let encoder = JSONEncoder()
-                encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-                var data = try encoder.encode(target)
-                data.append(0x0A)
-                FileHandle.standardOutput.write(data)
+                try writeJSON(target)
             }
         } catch {
             writeError("error: \(error.localizedDescription)\n")
             exit(EXIT_FAILURE)
         }
+    }
+
+    private static func inspect(path: String) {
+        do {
+            try InputResolver().withResolvedTarget(at: URL(filePath: path)) { target in
+                try writeJSON(try MachOInspector().inspect(target))
+            }
+        } catch {
+            writeError("error: \(error.localizedDescription)\n")
+            exit(EXIT_FAILURE)
+        }
+    }
+
+    private static func writeJSON<Value: Encodable>(_ value: Value) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        var data = try encoder.encode(value)
+        data.append(0x0A)
+        FileHandle.standardOutput.write(data)
     }
 }

@@ -48,6 +48,40 @@ IPA paths in the JSON refer to a scoped temporary workspace. The resolver remove
 immediately after the command finishes. Library clients use the scoped `withResolvedTarget` API
 to inspect an extracted executable while it is available.
 
+## Inspect Mach-O metadata
+
+`inspect` resolves the input and parses every thin or fat Mach-O slice without relying on `lipo`
+or `otool`:
+
+```bash
+.build/debug/machpatch inspect "/path/to/Fixture.ipa" --json
+```
+
+The JSON report includes:
+
+- raw CPU type, subtype, subtype base, and capability bits;
+- normalized architecture without collapsing unknown subtypes;
+- iPhoneOS versus iPhone Simulator platform metadata;
+- minimum OS and SDK versions;
+- `LC_ENCRYPTION_INFO` or `LC_ENCRYPTION_INFO_64` values;
+- file type, endianness, slice offset, and slice size;
+- dylib install name and strong, weak, re-exported, upward, or lazy dependencies.
+
+For example, an ordinary decrypted device executable reports facts such as:
+
+```json
+{
+  "architecture": "arm64",
+  "cpuSubtype": 0,
+  "encrypted": false,
+  "encryptionCryptID": 0,
+  "minimumOSVersion": "15.6",
+  "platform": "iPhoneOS",
+  "platformValue": 2,
+  "sdkVersion": "26.0"
+}
+```
+
 ## Development tools
 
 The repository includes configuration for `swift-format` and SwiftLint. When those tools are
@@ -66,6 +100,6 @@ and implementation constraints.
 
 ## Project status
 
-Safe IPA, app-bundle, and direct Mach-O resolution is implemented. Internal Mach-O inspection is
-the next milestone. Objective-C metadata extraction and the macOS interface are intentionally
-deferred until the command-line inspection pipeline is reliable.
+Safe input resolution and native thin/fat Mach-O inspection are implemented. Objective-C metadata
+extraction and the macOS interface are intentionally deferred until the remaining command-line
+pipeline is reliable.

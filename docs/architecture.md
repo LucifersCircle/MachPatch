@@ -52,6 +52,26 @@ The current ZIP validator supports bounded single-disk archives, including ZIP64
 individual entries. Multi-disk archives, encrypted ZIP entries, unsafe paths, special Unix file
 types, and unreasonably large expanded archives are rejected explicitly.
 
+## Mach-O inspection
+
+`MachOInspector` is an internal bounds-checked reader for the facts needed before Objective-C
+metadata extraction. It recognizes thin 32/64-bit headers and 32/64-bit fat containers in both
+byte orders. Fat table CPU values are checked against each enclosed thin header, slice ranges may
+not overlap, and load-command counts and byte ranges are bounded before parsing.
+
+The reader currently normalizes:
+
+- known CPU types and subtype bases while preserving raw signed subtype and capability bits;
+- file type, byte order, and 32/64-bit status;
+- `LC_BUILD_VERSION` and legacy version-minimum commands;
+- device, simulator, Catalyst, and other known Apple platform values;
+- 32/64-bit encryption commands and `cryptid`;
+- dylib identity and load, weak, re-export, upward, and lazy dependencies.
+
+Unknown CPU subtypes and platform values remain `unknown` with their raw numeric fields intact.
+The parser reports these facts only. Future architecture-selection policy belongs in the builder
+layer and must not be added to `MachOInspector`.
+
 ## Design constraints
 
 - Report unknown architecture and ABI values explicitly; never silently guess.
