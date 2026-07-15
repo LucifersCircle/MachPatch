@@ -18,7 +18,12 @@ final class PatchDylibBuilderTests: XCTestCase {
         let runner = FakeBuildCommandRunner()
         let prober = FakeArchitectureProber()
         let builder = PatchDylibBuilder(commandRunner: runner, architectureProber: prober)
-        let firstRecord = try builder.build(makeProject(), outputDirectory: output)
+        let progress = BuildProgressRecorder()
+        let firstRecord = try builder.build(
+            makeProject(),
+            outputDirectory: output,
+            progress: { progress.append($0) }
+        )
 
         let firstDylib = try Data(contentsOf: dylibURL)
         XCTAssertEqual(firstDylib.last, 1)
@@ -30,6 +35,14 @@ final class PatchDylibBuilderTests: XCTestCase {
         XCTAssertEqual(firstRecord.slices.count, 1)
         XCTAssertEqual(firstRecord.slices[0].cpuSubtype, 0)
         XCTAssertEqual(firstRecord.capabilityProbes.map(\.requestedArchitecture), [.arm64])
+        XCTAssertEqual(
+            progress.values.map(\.phase),
+            [
+                .generatingSource, .discoveringToolchain, .probingArchitecture, .compiling,
+                .recordingOutput, .completed,
+            ]
+        )
+        XCTAssertEqual(progress.values.last?.fractionCompleted, 1)
         XCTAssertEqual(
             try JSONDecoder().decode(PatchBuildRecord.self, from: Data(contentsOf: recordURL)),
             firstRecord
@@ -353,6 +366,19 @@ final class PatchDylibBuilderTests: XCTestCase {
                 )
             ]
         )
+    }
+}
+
+private final class BuildProgressRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [PatchBuildProgress] = []
+
+    var values: [PatchBuildProgress] {
+        lock.withLock { storage }
+    }
+
+    func append(_ progress: PatchBuildProgress) {
+        lock.withLock { storage.append(progress) }
     }
 }
 

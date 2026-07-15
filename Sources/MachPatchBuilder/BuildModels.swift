@@ -1,6 +1,45 @@
 import Foundation
 import MachPatchCore
 
+public enum PatchBuildPhase: String, Codable, Equatable, Sendable {
+    case preparing
+    case generatingSource
+    case discoveringToolchain
+    case probingArchitecture
+    case compiling
+    case inspectingSymbols
+    case merging
+    case recordingOutput
+    case completed
+}
+
+public struct PatchBuildProgress: Codable, Equatable, Sendable {
+    public let phase: PatchBuildPhase
+    public let architecture: BuildSliceArchitecture?
+    public let completedUnitCount: Int
+    public let totalUnitCount: Int
+    public let message: String
+
+    public init(
+        phase: PatchBuildPhase,
+        architecture: BuildSliceArchitecture? = nil,
+        completedUnitCount: Int,
+        totalUnitCount: Int,
+        message: String
+    ) {
+        self.phase = phase
+        self.architecture = architecture
+        self.completedUnitCount = completedUnitCount
+        self.totalUnitCount = totalUnitCount
+        self.message = message
+    }
+
+    public var fractionCompleted: Double {
+        guard totalUnitCount > 0 else { return 0 }
+        return min(max(Double(completedUnitCount) / Double(totalUnitCount), 0), 1)
+    }
+}
+
 public struct BuildCommandInvocation: Codable, Equatable, Sendable {
     public let executablePath: String
     public let arguments: [String]

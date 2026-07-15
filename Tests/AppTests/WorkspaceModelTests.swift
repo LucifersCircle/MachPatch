@@ -215,6 +215,119 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertEqual(wideLayout.sourceWidth, 1_199)
     }
 
+    func testBuildWorkspaceRightPanelKeepsGeneratedSourceUsable() {
+        let compactLayout = BuildWorkspaceRightPanelLayout(availableHeight: 400)
+        XCTAssertEqual(compactLayout.generatedSourceHeight, 420)
+
+        let tallLayout = BuildWorkspaceRightPanelLayout(availableHeight: 1_000)
+        XCTAssertEqual(tallLayout.generatedSourceHeight, 620)
+    }
+
+    func testDylibBuildPublishesArtifactAndProjectEditMarksItStale() async throws {
+        let target = makeLoadedTarget()
+        let analysis = makeAnalysis(for: target)
+        let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
+        let buildService = StubPatchBuildService()
+        let model = WorkspaceModel(
+            loader: SuccessfulLoader(target: loadedTarget),
+            buildService: buildService
+        )
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+
+        model.buildDylib()
+        await waitForBuildToFinish(model)
+
+        guard case .succeeded(let artifact) = model.buildState else {
+            return XCTFail("Expected a successful dylib build")
+        }
+        XCTAssertEqual(artifact.record.architecture, .arm64)
+        XCTAssertEqual(artifact.dylibURL.lastPathComponent, "FixturePatch.dylib")
+
+        model.updateOutputName("ChangedPatch")
+
+        guard case .stale(let staleArtifact) = model.buildState else {
+            return XCTFail("Project edits must mark the successful build stale")
+        }
+        XCTAssertEqual(staleArtifact, artifact)
+    }
+
+    func testDisablingPatchPreservesConfigurationAndOmitsItFromGeneratedSource() async throws {
+        let target = makeLoadedTarget()
+        let analysis = makeAnalysis(for: target)
+        let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
+        let model = WorkspaceModel(loader: SuccessfulLoader(target: loadedTarget))
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+
+        let method = try XCTUnwrap(analysis.metadata.classes.first?.instanceMethods.first)
+        let createdPatch = try model.addPatch(className: "AppController", method: method)
+        let configuredPatch = createdPatch.replacing(action: .returnBoolean(true))
+        model.updatePatch(configuredPatch)
+        model.updatePatch(configuredPatch.replacing(enabled: false))
+
+        let disabledPatch = try XCTUnwrap(model.patchProject?.patches.first)
+        XCTAssertFalse(disabledPatch.enabled)
+        XCTAssertEqual(disabledPatch.action, .returnBoolean(true))
+        XCTAssertEqual(disabledPatch.id, configuredPatch.id)
+        let roundTrippedProject = try PatchProjectCodec.decode(
+            PatchProjectCodec.encode(try XCTUnwrap(model.patchProject))
+        )
+        XCTAssertEqual(roundTrippedProject.patches.first, disabledPatch)
+        guard case .ready(let disabledBundle) = model.generatedSourcePreview else {
+            return XCTFail("Expected source generation with a disabled patch")
+        }
+        XCTAssertFalse(disabledBundle.files.first?.contents.contains("featureEnabled") == true)
+
+        model.updatePatch(disabledPatch.replacing(enabled: true))
+
+        guard case .ready(let enabledBundle) = model.generatedSourcePreview else {
+            return XCTFail("Expected source regeneration after enabling the patch")
+        }
+        XCTAssertTrue(enabledBundle.files.first?.contents.contains("featureEnabled") == true)
+        XCTAssertTrue(enabledBundle.files.first?.contents.contains("return YES;") == true)
+    }
+
+    func testFailedRebuildPreservesArtifactAndStructuredCompilerDiagnostics() async {
+        let target = makeLoadedTarget()
+        let analysis = makeAnalysis(for: target)
+        let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
+        let buildService = StubPatchBuildService()
+        let model = WorkspaceModel(
+            loader: SuccessfulLoader(target: loadedTarget),
+            buildService: buildService
+        )
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+        model.buildDylib()
+        await waitForBuildToFinish(model)
+        let successfulArtifact = model.buildState.artifact
+
+        let invocation = BuildCommandInvocation(
+            executablePath: "/usr/bin/clang",
+            arguments: ["-dynamiclib", "Fixture.m"]
+        )
+        buildService.failure = .compilerFailed(
+            BuildCommandExecution(
+                invocation: invocation,
+                standardOutput: "",
+                standardError: "Fixture.m:12:3: error: synthetic failure\n",
+                terminationStatus: 1,
+                durationMilliseconds: 9
+            )
+        )
+        model.buildDylib()
+        await waitForBuildToFinish(model)
+
+        guard case .failed(let failure, let previousArtifact) = model.buildState else {
+            return XCTFail("Expected a failed rebuild")
+        }
+        XCTAssertEqual(previousArtifact, successfulArtifact)
+        XCTAssertEqual(failure.command, "/usr/bin/clang -dynamiclib Fixture.m")
+        XCTAssertEqual(failure.terminationStatus, 1)
+        XCTAssertEqual(failure.diagnosticText, "Fixture.m:12:3: error: synthetic failure")
+    }
+
     func testPatchActionPolicyIsTypeAwareAndExplainsUnsupportedSignatures() throws {
         let booleanSignature = try ObjectiveCTypeEncodingDecoder.decodeMethodSignature("B16@0:8")
 
@@ -292,6 +405,7 @@ final class WorkspaceModelTests: XCTestCase {
         try PatchProjectCodec.encode(savedProject).write(to: projectURL)
 
         model.removePatch(id: try XCTUnwrap(savedProject.patches.first?.id))
+        model.navigation = .build
         model.saveProject()
         XCTAssertTrue(model.isProjectExporterPresented)
         model.isProjectExporterPresented = false
@@ -300,7 +414,8 @@ final class WorkspaceModelTests: XCTestCase {
         await waitForProjectImport(model)
 
         XCTAssertEqual(model.patchProject, savedProject)
-        XCTAssertEqual(model.selectedClass?.name, "AppController")
+        XCTAssertEqual(model.navigation, .build)
+        XCTAssertNil(model.selectedClass)
     }
 
     func testChangedTargetProjectRequiresExplicitRetargetDecision() async throws {
@@ -414,6 +529,14 @@ final class WorkspaceModelTests: XCTestCase {
             await Task.yield()
         }
         XCTFail("Patch project import did not finish")
+    }
+
+    private func waitForBuildToFinish(_ model: WorkspaceModel) async {
+        for _ in 0..<1_000 {
+            if !model.buildState.isBuilding { return }
+            await Task.yield()
+        }
+        XCTFail("Dylib build did not finish")
     }
 
     private func temporaryProjectURL() -> URL {
@@ -549,6 +672,88 @@ private struct SuccessfulLoader: TargetLoading {
     ) async throws -> ObjectiveCAnalysis {
         guard let analysis else { throw StubError.failed }
         return analysis
+    }
+}
+
+private final class StubPatchBuildService: PatchBuildServicing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedFailure: PatchDylibBuilderError?
+    private let artifact: PatchBuildArtifact
+
+    init() {
+        artifact = StubPatchBuildService.makeArtifact()
+    }
+
+    var failure: PatchDylibBuilderError? {
+        get { lock.withLock { storedFailure } }
+        set { lock.withLock { storedFailure = newValue } }
+    }
+
+    func build(
+        project: PatchProject,
+        progress: @escaping @Sendable (PatchBuildProgress) -> Void
+    ) throws -> PatchBuildArtifact {
+        progress(
+            PatchBuildProgress(
+                phase: .compiling,
+                architecture: .arm64,
+                completedUnitCount: 3,
+                totalUnitCount: 5,
+                message: "Compiling the arm64 dylib slice…"
+            )
+        )
+        if let failure = lock.withLock({ storedFailure }) { throw failure }
+        progress(
+            PatchBuildProgress(
+                phase: .completed,
+                completedUnitCount: 5,
+                totalUnitCount: 5,
+                message: "Dylib build completed."
+            )
+        )
+        return artifact
+    }
+
+    private static func makeArtifact() -> PatchBuildArtifact {
+        let workspace = FileManager.default.temporaryDirectory.appending(
+            path: "MachPatchAppTestBuild-\(UUID().uuidString)",
+            directoryHint: .isDirectory
+        )
+        let resolution = BuildArchitectureResolution(
+            requestedMode: .automatic,
+            outputArchitecture: .arm64,
+            slices: [.arm64],
+            targetArchitecture: .arm64,
+            targetCPUSubtype: 0,
+            targetArm64eABI: nil,
+            reason: "Test resolution"
+        )
+        let toolchain = AppleToolchain(
+            developerDirectory: "/Applications/Xcode.app/Contents/Developer",
+            xcodeVersion: "Xcode 26.0",
+            clangPath: "/usr/bin/clang",
+            clangVersion: "Apple clang 17.0",
+            lipoPath: "/usr/bin/lipo",
+            nmPath: "/usr/bin/nm",
+            sdkPath: "/Applications/Xcode.app/iPhoneOS.sdk",
+            sdkVersion: "26.0"
+        )
+        let record = PatchBuildRecord(
+            projectName: "Fixture Patch",
+            architecture: .arm64,
+            minimumIOSVersion: "15.0",
+            installName: "@rpath/FixturePatch.dylib",
+            sourcePath: workspace.appending(path: "MachPatchGenerated.m").path,
+            outputPath: workspace.appending(path: "FixturePatch.dylib").path,
+            recordPath: workspace.appending(path: "MachPatchBuild.json").path,
+            toolchain: toolchain,
+            architectureResolution: resolution,
+            capabilityProbes: [],
+            slices: [],
+            symbolChecks: [],
+            merge: nil
+        )
+        return PatchBuildArtifact(workspaceURL: workspace, record: record)
     }
 }
 

@@ -21,14 +21,22 @@ final class WorkspaceModel: ObservableObject {
     @Published private(set) var generatedSourcePreview: GeneratedSourcePreviewState =
         .unavailable("Create a valid patch project to preview its generated source.")
     @Published private(set) var architecturePreview: ArchitecturePreviewState = .unavailable
+    @Published private(set) var buildState: PatchBuildState = .idle
 
     private let loader: any TargetLoading
+    private let buildService: any PatchBuildServicing
     private var loadTask: Task<Void, Never>?
     private var analysisTask: Task<Void, Never>?
     private var projectTask: Task<Void, Never>?
+    private var buildTask: Task<Void, Never>?
+    private var buildID: UUID?
 
-    init(loader: any TargetLoading = TargetLoader()) {
+    init(
+        loader: any TargetLoading = TargetLoader(),
+        buildService: any PatchBuildServicing = PatchBuildService()
+    ) {
         self.loader = loader
+        self.buildService = buildService
     }
 
     func chooseTarget() {
@@ -47,6 +55,7 @@ final class WorkspaceModel: ObservableObject {
         loadTask?.cancel()
         analysisTask?.cancel()
         projectTask?.cancel()
+        resetBuildState(removingArtifact: true)
         navigation = .target
         classSearch = ""
         classFilter = .all
@@ -89,6 +98,7 @@ final class WorkspaceModel: ObservableObject {
             return
         }
 
+        resetBuildState(removingArtifact: true)
         analysisTask?.cancel()
         navigation = .target
         phase = .loaded(loadedTarget.replacingAnalysisState(.loading(sliceIndex: sliceIndex)))
@@ -176,6 +186,14 @@ final class WorkspaceModel: ObservableObject {
 
     var projectDocument: PatchProjectDocument? {
         patchProject.map(PatchProjectDocument.init(project:))
+    }
+
+    var canBuild: Bool {
+        guard projectValidationReport?.isValid == true, !buildState.isBuilding else {
+            return false
+        }
+        if case .resolved = architecturePreview { return true }
+        return false
     }
 
     var defaultProjectFilename: String {
@@ -320,6 +338,68 @@ final class WorkspaceModel: ObservableObject {
         updateProjectDraft { $0.enableARC = enableARC }
     }
 
+    func buildDylib() {
+        guard canBuild, let project = patchProject else {
+            workspaceAlert = WorkspaceAlert(
+                title: "Project Isn’t Buildable",
+                message: "Fix the project and architecture validation errors before building."
+            )
+            return
+        }
+
+        let buildID = UUID()
+        let previousArtifact = buildState.artifact
+        self.buildID = buildID
+        buildState = .building(
+            PatchBuildProgress(
+                phase: .preparing,
+                completedUnitCount: 0,
+                totalUnitCount: 1,
+                message: "Preparing an isolated build workspace…"
+            ),
+            previousArtifact: previousArtifact
+        )
+        let buildService = buildService
+        let handleProgress: @MainActor @Sendable (PatchBuildProgress) -> Void = {
+            [weak self] progress in
+            guard self?.buildID == buildID else { return }
+            self?.buildState = .building(
+                progress,
+                previousArtifact: previousArtifact
+            )
+        }
+
+        buildTask = Task { [weak self] in
+            do {
+                let artifact = try await Task.detached(priority: .userInitiated) {
+                    try buildService.build(project: project) { progress in
+                        Task { @MainActor in
+                            handleProgress(progress)
+                        }
+                    }
+                }.value
+                guard let self, self.buildID == buildID else {
+                    Self.removeBuildArtifact(artifact)
+                    return
+                }
+                self.buildID = nil
+                if let previousArtifact,
+                    previousArtifact.workspaceURL != artifact.workspaceURL
+                {
+                    Self.removeBuildArtifact(previousArtifact)
+                }
+                self.buildState = .succeeded(artifact)
+            } catch {
+                guard let self, self.buildID == buildID else { return }
+                self.buildID = nil
+                self.buildState = .failed(
+                    PatchBuildFailure(error: error),
+                    previousArtifact: previousArtifact
+                )
+            }
+        }
+    }
+
     private func matchesFilter(_ objectiveCClass: ObjectiveCClass) -> Bool {
         switch classFilter {
         case .all:
@@ -338,13 +418,6 @@ final class WorkspaceModel: ObservableObject {
         targetOverride: PatchTargetIdentity? = nil
     ) {
         replaceProjectDraft(PatchProjectDraft(project: project, targetOverride: targetOverride))
-        if let firstPatch = project.patches.first,
-            let objectiveCClass = analysis?.metadata.classes.first(where: {
-                $0.name == firstPatch.className
-            })
-        {
-            navigation = .objectiveCClass(objectiveCClass.id)
-        }
     }
 
     private nonisolated static func readProject(at projectURL: URL) async throws -> PatchProject {
@@ -383,8 +456,37 @@ final class WorkspaceModel: ObservableObject {
     }
 
     private func replaceProjectDraft(_ projectDraft: PatchProjectDraft?) {
+        invalidateBuildState()
         self.projectDraft = projectDraft
         refreshBuildWorkspace()
+    }
+
+    private func invalidateBuildState() {
+        switch buildState {
+        case .building(_, let previousArtifact):
+            buildTask?.cancel()
+            buildID = nil
+            buildState = previousArtifact.map(PatchBuildState.stale) ?? .idle
+        case .succeeded(let artifact):
+            buildState = .stale(artifact)
+        case .failed(_, let previousArtifact):
+            buildState = previousArtifact.map(PatchBuildState.stale) ?? .idle
+        case .idle, .stale:
+            break
+        }
+    }
+
+    private func resetBuildState(removingArtifact: Bool) {
+        buildTask?.cancel()
+        buildID = nil
+        if removingArtifact, let artifact = buildState.artifact {
+            Self.removeBuildArtifact(artifact)
+        }
+        buildState = .idle
+    }
+
+    private nonisolated static func removeBuildArtifact(_ artifact: PatchBuildArtifact) {
+        try? FileManager.default.removeItem(at: artifact.workspaceURL)
     }
 
     private func refreshBuildWorkspace() {

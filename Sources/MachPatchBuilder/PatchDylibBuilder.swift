@@ -23,12 +23,34 @@ public struct PatchDylibBuilder: Sendable {
     public func build(
         _ project: PatchProject,
         outputDirectory: URL,
-        architectureMode: PatchArchitectureMode? = nil
+        architectureMode: PatchArchitectureMode? = nil,
+        progress: @Sendable (PatchBuildProgress) -> Void = { _ in }
     ) throws -> PatchBuildRecord {
         let resolution = try ArchitectureResolver.resolve(
             mode: architectureMode ?? project.build.architectureMode,
             selectedSlice: project.target.selectedSlice
         )
+        let universalStepCount = resolution.outputArchitecture == .universal ? 2 : 0
+        let totalUnitCount = 3 + (resolution.slices.count * 2) + universalStepCount
+        var completedUnitCount = 0
+
+        func report(
+            _ phase: PatchBuildPhase,
+            architecture: BuildSliceArchitecture? = nil,
+            message: String
+        ) {
+            progress(
+                PatchBuildProgress(
+                    phase: phase,
+                    architecture: architecture,
+                    completedUnitCount: completedUnitCount,
+                    totalUnitCount: totalUnitCount,
+                    message: message
+                )
+            )
+        }
+
+        report(.generatingSource, message: "Generating deterministic Objective-C source…")
         let sourceBundle = try ObjectiveCSourceGenerator().generate(project)
         let outputDirectory = outputDirectory.standardizedFileURL
         let sourceURL =
@@ -36,6 +58,7 @@ public struct PatchDylibBuilder: Sendable {
                 sourceBundle,
                 to: outputDirectory
             ).first ?? outputDirectory.appending(path: MachPatchGenerator.generatedSourceFileName)
+        completedUnitCount += 1
 
         let baseName = project.build.outputName
         let outputFileName = "\(baseName).dylib"
@@ -48,11 +71,18 @@ public struct PatchDylibBuilder: Sendable {
             try removePreviousRegularFile(at: url)
         }
 
+        report(.discoveringToolchain, message: "Discovering the selected Xcode toolchain…")
         let toolchain = try AppleToolchainDiscoverer(commandRunner: commandRunner).discover()
+        completedUnitCount += 1
         let installName = "@rpath/\(outputFileName)"
 
         do {
             let probes = try resolution.slices.map { architecture in
+                report(
+                    .probingArchitecture,
+                    architecture: architecture,
+                    message: "Checking \(architecture.rawValue) compiler capability…"
+                )
                 let probe = try architectureProber.probe(
                     architecture,
                     toolchain: toolchain,
@@ -63,11 +93,17 @@ public struct PatchDylibBuilder: Sendable {
                     resolution: resolution,
                     minimumIOSVersion: project.build.minimumIOSVersion
                 )
+                completedUnitCount += 1
                 return probe
             }
 
             var sliceRecords: [PatchBuildSliceRecord] = []
             for architecture in resolution.slices {
+                report(
+                    .compiling,
+                    architecture: architecture,
+                    message: "Compiling the \(architecture.rawValue) dylib slice…"
+                )
                 let sliceURL: URL =
                     resolution.outputArchitecture == .universal
                     ? (architecture == .arm64 ? arm64URL : arm64eURL)
@@ -85,15 +121,22 @@ public struct PatchDylibBuilder: Sendable {
                         installName: installName
                     )
                 )
+                completedUnitCount += 1
             }
 
             let symbolChecks: [BuildCommandExecution]
             let merge: BuildCommandExecution?
             if resolution.outputArchitecture == .universal {
+                report(
+                    .inspectingSymbols,
+                    message: "Comparing exported symbols across slices…"
+                )
                 symbolChecks = try compareExportedSymbols(
                     records: sliceRecords,
                     toolchain: toolchain
                 )
+                completedUnitCount += 1
+                report(.merging, message: "Merging validated slices into a universal dylib…")
                 merge = try mergeUniversal(
                     records: sliceRecords,
                     toolchain: toolchain,
@@ -101,11 +144,13 @@ public struct PatchDylibBuilder: Sendable {
                     minimumIOSVersion: project.build.minimumIOSVersion,
                     installName: installName
                 )
+                completedUnitCount += 1
             } else {
                 symbolChecks = []
                 merge = nil
             }
 
+            report(.recordingOutput, message: "Recording reproducible build metadata…")
             let record = PatchBuildRecord(
                 projectName: project.projectName,
                 architecture: resolution.outputArchitecture,
@@ -122,6 +167,8 @@ public struct PatchDylibBuilder: Sendable {
                 merge: merge
             )
             try writeRecord(record, to: recordURL)
+            completedUnitCount += 1
+            report(.completed, message: "Dylib build completed.")
             return record
         } catch {
             for url in productURLs + [recordURL] {

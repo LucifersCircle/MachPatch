@@ -672,7 +672,7 @@ private struct PatchEditorView: View {
     }
 }
 
-private extension PatchActionKind {
+extension PatchActionKind {
     var displayName: String {
         switch self {
         case .returnBoolean: "Return Boolean"
