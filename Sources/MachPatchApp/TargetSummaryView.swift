@@ -84,7 +84,7 @@ struct TargetSummaryView: View {
                 }
 
                 Text(
-                    "Counts describe metadata declarations. Compatible category methods are measured here but will enter the editor in the next implementation phase."
+                    "Counts describe metadata declarations. Compatible category methods are browsable under Category Targets in the sidebar."
                 )
                 .font(.callout)
                 .foregroundStyle(.secondary)

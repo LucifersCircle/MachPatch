@@ -91,7 +91,9 @@ For example, an ordinary decrypted device executable reports facts such as:
 ```
 
 Each summary includes its superclass, declared method/property/ivar counts, adopted protocols,
-Objective-C-visible Swift status, and the explicitly heuristic `isLikelyAppDefined` flag.
+Objective-C-visible Swift status, and the explicitly heuristic `isLikelyAppDefined` flag. The
+output also lists category owners, including runtime classes that are not declared by the analyzed
+executable itself.
 
 `methods` returns the instance and class methods declared by one exact class name, including raw
 Objective-C type encodings and implementation addresses when the analyzer can recover them:
@@ -99,6 +101,11 @@ Objective-C type encodings and implementation addresses when the analyzer can re
 ```bash
 .build/debug/machpatch methods "/path/to/Fixture.ipa" FixtureViewController
 ```
+
+The class name may also be a category-only runtime target such as an Apple framework class. Class
+and category declarations with the same selector are canonicalized by method kind and runtime
+identity. Matching encodings become one method record with all declaration origins; conflicting
+encodings remain visible but are blocked from patching.
 
 The analyzer first probes the bundled Python bridge for LIEF Extended Objective-C support. When
 that optional capability is unavailable, it records the reason in `warnings` and falls back to
@@ -120,7 +127,7 @@ project validation and the patch editor:
 ```
 
 Human-readable output summarizes declarations available in the editor, compatible category
-declarations that are not exposed yet, unavailable declarations, reason counts, and the most
+declarations available under **Category Targets**, unavailable declarations, reason counts, and the most
 common unsupported ABI types. `--json` emits the complete deterministic report, including every
 class/category origin, selector, raw and decoded signature, compatible action list, and exact
 unavailable issues. Counts describe metadata declarations; a class and category that declare the
@@ -229,6 +236,17 @@ executable name, and selected slice. Normal compatibility validation still runs 
 **Delete Saved Patch** lists the entire private library and requires destructive confirmation.
 **Import Patch…** and **Export Patch…** remain available for exchanging the same canonical JSON
 format with other locations or users.
+
+## Category targets and property accessors
+
+The SwiftUI sidebar separates classes declared by the executable from category-only runtime
+targets. Category names participate in global and per-class method search, and every method shows
+its class/category declaration origins. Category patches use the owning runtime class and selector,
+so they retain the same project schema and generated runtime installer as ordinary class methods.
+
+Properties link to their declared getter and setter methods, including custom `G` and `S`
+accessors. Read-only and missing accessors are identified inline. MachPatch never invents an
+accessor signature when the binary metadata does not declare that method.
 
 ## Optional exports
 

@@ -7,6 +7,11 @@ import MachPatchGenerator
 import MachPatchPackager
 import MachPatchVerifier
 
+struct MethodRevealRequest: Equatable, Identifiable {
+    let id = UUID()
+    let methodID: String
+}
+
 @MainActor
 final class WorkspaceModel: ObservableObject {
     @Published private(set) var phase: WorkspacePhase = .empty
@@ -14,6 +19,7 @@ final class WorkspaceModel: ObservableObject {
     @Published private(set) var isDropTargeted = false
     @Published var navigation: WorkspaceNavigation? = .target
     @Published var selectedMethodID: String?
+    @Published private(set) var methodRevealRequest: MethodRevealRequest?
     @Published var classSearch = ""
     @Published var classFilter: ObjectiveCClassFilter = .all
     @Published private(set) var projectDraft: PatchProjectDraft?
@@ -80,6 +86,7 @@ final class WorkspaceModel: ObservableObject {
         resetBuildState(removingArtifact: true)
         navigation = .target
         selectedMethodID = nil
+        methodRevealRequest = nil
         classSearch = ""
         classFilter = .all
         savedProjectBaseline = nil
@@ -131,7 +138,8 @@ final class WorkspaceModel: ObservableObject {
         phase = .loaded(
             loadedTarget.replacingAnalysisState(
                 .loading(sliceIndex: sliceIndex),
-                patchabilityReport: nil
+                patchabilityReport: nil,
+                classBrowserTargets: []
             )
         )
         let loader = loader
@@ -150,7 +158,8 @@ final class WorkspaceModel: ObservableObject {
                 let analysis = loadedAnalysis.analysis
                 let analyzedTarget = currentTarget.replacingAnalysisState(
                     .loaded(analysis),
-                    patchabilityReport: loadedAnalysis.patchabilityReport
+                    patchabilityReport: loadedAnalysis.patchabilityReport,
+                    classBrowserTargets: loadedAnalysis.classBrowserTargets
                 )
                 self?.phase = .loaded(analyzedTarget)
                 self?.replaceProjectDraft(
@@ -167,7 +176,8 @@ final class WorkspaceModel: ObservableObject {
                 self?.phase = .loaded(
                     currentTarget.replacingAnalysisState(
                         .failed(sliceIndex: sliceIndex, message: error.localizedDescription),
-                        patchabilityReport: nil
+                        patchabilityReport: nil,
+                        classBrowserTargets: []
                     )
                 )
             }
@@ -181,17 +191,18 @@ final class WorkspaceModel: ObservableObject {
         return analysis
     }
 
-    var filteredClasses: [ObjectiveCClass] {
-        guard let analysis else { return [] }
+    var filteredClasses: [ObjectiveCClassBrowserTarget] {
+        guard case .loaded(let loadedTarget) = phase else { return [] }
         let query = classSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        return analysis.metadata.classes.filter { objectiveCClass in
-            matchesFilter(objectiveCClass) && matchesQuery(objectiveCClass, query: query)
+        return loadedTarget.classBrowserTargets.filter { target in
+            matchesFilter(target) && matchesQuery(target, query: query)
         }
     }
 
-    var selectedClass: ObjectiveCClass? {
+    var selectedClass: ObjectiveCClassBrowserTarget? {
         guard case .objectiveCClass(let classID) = navigation else { return nil }
-        return analysis?.metadata.classes.first { $0.id == classID }
+        guard case .loaded(let loadedTarget) = phase else { return nil }
+        return loadedTarget.classBrowserTargets.first { $0.id == classID }
     }
 
     var targetIconData: Data? {
@@ -199,13 +210,18 @@ final class WorkspaceModel: ObservableObject {
         return loadedTarget.iconData
     }
 
-    func methodSearchMatches(for objectiveCClass: ObjectiveCClass) -> [ObjectiveCMethod] {
+    func methodSearchMatches(
+        for objectiveCClass: ObjectiveCClassBrowserTarget
+    ) -> [ObjectiveCCanonicalMethod] {
         let query = classSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty, !matchesClassMetadata(objectiveCClass, query: query) else {
             return []
         }
-        return (objectiveCClass.instanceMethods + objectiveCClass.classMethods).filter {
+        return objectiveCClass.methods.filter {
             $0.selector.localizedCaseInsensitiveContains(query)
+                || $0.categoryNames.contains(where: {
+                    $0.localizedCaseInsensitiveContains(query)
+                })
         }
     }
 
@@ -653,13 +669,14 @@ final class WorkspaceModel: ObservableObject {
         pendingProjectImport = nil
     }
 
-    func patch(className: String, method: ObjectiveCMethod) -> MethodPatch? {
-        projectDraft?.patch(className: className, method: method)
+    func patch(className: String, method: ObjectiveCCanonicalMethod) -> MethodPatch? {
+        projectDraft?.patch(className: className, method: method.method)
     }
 
     func inspectPatch(_ patch: MethodPatch) {
         guard
-            let objectiveCClass = analysis?.metadata.classes.first(where: {
+            case .loaded(let loadedTarget) = phase,
+            let objectiveCClass = loadedTarget.classBrowserTargets.first(where: {
                 $0.name == patch.className
             })
         else {
@@ -670,11 +687,11 @@ final class WorkspaceModel: ObservableObject {
             return
         }
 
-        let methods = objectiveCClass.instanceMethods + objectiveCClass.classMethods
         guard
-            let method = methods.first(where: {
-                $0.selector == patch.selector && $0.kind == patch.methodKind
-            })
+            let method = objectiveCClass.method(
+                kind: patch.methodKind,
+                selector: patch.selector
+            )
         else {
             let marker = patch.methodKind == .instance ? "−" : "+"
             workspaceAlert = WorkspaceAlert(
@@ -685,16 +702,42 @@ final class WorkspaceModel: ObservableObject {
             return
         }
 
-        selectedMethodID = method.id
+        revealMethod(method)
         navigation = .objectiveCClass(objectiveCClass.id)
+    }
+
+    func revealMethod(_ method: ObjectiveCCanonicalMethod) {
+        selectedMethodID = method.id
+        methodRevealRequest = MethodRevealRequest(methodID: method.id)
+    }
+
+    func consumeMethodRevealRequest(id: UUID) {
+        guard methodRevealRequest?.id == id else { return }
+        methodRevealRequest = nil
+    }
+
+    @discardableResult
+    func addPatch(className: String, method: ObjectiveCCanonicalMethod) throws -> MethodPatch {
+        guard var projectDraft else { throw PatchDraftError.projectUnavailable }
+        guard !method.hasConflictingTypeEncodings else {
+            throw PatchDraftError.conflictingTypeEncodings(method.conflictingTypeEncodings)
+        }
+        let patch = try projectDraft.addPatch(className: className, method: method.method)
+        replaceProjectDraft(projectDraft)
+        return patch
     }
 
     @discardableResult
     func addPatch(className: String, method: ObjectiveCMethod) throws -> MethodPatch {
-        guard var projectDraft else { throw PatchDraftError.projectUnavailable }
-        let patch = try projectDraft.addPatch(className: className, method: method)
-        replaceProjectDraft(projectDraft)
-        return patch
+        guard let analysis,
+            let canonicalMethod = ObjectiveCMethodCatalog.method(
+                forClassNamed: className,
+                kind: method.kind,
+                selector: method.selector,
+                in: analysis.metadata
+            )
+        else { throw PatchDraftError.projectUnavailable }
+        return try addPatch(className: className, method: canonicalMethod)
     }
 
     func updatePatch(_ patch: MethodPatch) {
@@ -828,7 +871,7 @@ final class WorkspaceModel: ObservableObject {
         }
     }
 
-    private func matchesFilter(_ objectiveCClass: ObjectiveCClass) -> Bool {
+    private func matchesFilter(_ objectiveCClass: ObjectiveCClassBrowserTarget) -> Bool {
         switch classFilter {
         case .all:
             true
@@ -888,21 +931,29 @@ final class WorkspaceModel: ObservableObject {
         }.value
     }
 
-    private func matchesQuery(_ objectiveCClass: ObjectiveCClass, query: String) -> Bool {
+    private func matchesQuery(
+        _ objectiveCClass: ObjectiveCClassBrowserTarget,
+        query: String
+    ) -> Bool {
         guard !query.isEmpty else { return true }
         if matchesClassMetadata(objectiveCClass, query: query) {
+            return true
+        }
+        if objectiveCClass.categoryNames.contains(where: {
+            $0.localizedCaseInsensitiveContains(query)
+        }) {
             return true
         }
         return !methodSearchMatches(for: objectiveCClass).isEmpty
     }
 
     private func matchesClassMetadata(
-        _ objectiveCClass: ObjectiveCClass,
+        _ objectiveCClass: ObjectiveCClassBrowserTarget,
         query: String
     ) -> Bool {
         objectiveCClass.name.localizedCaseInsensitiveContains(query)
             || objectiveCClass.superclassName?.localizedCaseInsensitiveContains(query) == true
-            || objectiveCClass.imageName?.localizedCaseInsensitiveContains(query) == true
+            || objectiveCClass.imageName.localizedCaseInsensitiveContains(query)
     }
 
     private func updateProjectDraft(_ update: (inout PatchProjectDraft) -> Void) {

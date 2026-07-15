@@ -68,6 +68,7 @@ final class WorkspaceModelTests: XCTestCase {
         }
         XCTAssertEqual(analyzedTarget.patchabilityReport?.summary.classMethodCount, 2)
         XCTAssertEqual(analyzedTarget.patchabilityReport?.summary.patchableClassMethodCount, 2)
+        XCTAssertEqual(analyzedTarget.classBrowserTargets.count, 2)
     }
 
     func testClassFiltersSearchMethodsAndSelection() async throws {
@@ -119,7 +120,89 @@ final class WorkspaceModelTests: XCTestCase {
 
         XCTAssertEqual(model.navigation, .objectiveCClass("class-app"))
         XCTAssertEqual(model.selectedClass?.name, "AppController")
-        XCTAssertEqual(model.selectedMethodID, "method-app")
+        XCTAssertEqual(
+            model.selectedMethodID,
+            ObjectiveCMethodCatalog.identifier(
+                className: "AppController",
+                kind: .instance,
+                selector: "featureEnabled"
+            )
+        )
+        XCTAssertEqual(model.methodRevealRequest?.methodID, model.selectedMethodID)
+        XCTAssertNil(model.workspaceAlert)
+    }
+
+    func testCategoryOnlyTargetCanBeSearchedPatchedAndNavigated() async throws {
+        let target = makeLoadedTarget()
+        let baseAnalysis = makeAnalysis(for: target)
+        let getter = ObjectiveCMethod(
+            id: "category-getter",
+            selector: "featureEnabled",
+            kind: .instance,
+            typeEncoding: "B16@0:8",
+            implementationAddress: 0x3000
+        )
+        let setter = ObjectiveCMethod(
+            id: "category-setter",
+            selector: "setFeatureEnabled:",
+            kind: .instance,
+            typeEncoding: "v20@0:8B16",
+            implementationAddress: 0x3010
+        )
+        let category = ObjectiveCCategory(
+            id: "category-extras",
+            name: "Extras",
+            className: "ExternalController",
+            instanceMethods: [getter, setter],
+            classMethods: [],
+            properties: [
+                ObjectiveCProperty(
+                    id: "category-property",
+                    name: "featureEnabled",
+                    attributes: "TB,N"
+                )
+            ],
+            protocols: ["FeatureProviding"]
+        )
+        let analysis = ObjectiveCAnalysis(
+            target: baseAnalysis.target,
+            sliceIndex: baseAnalysis.sliceIndex,
+            architecture: baseAnalysis.architecture,
+            backend: baseAnalysis.backend,
+            warnings: baseAnalysis.warnings,
+            metadata: ObjectiveCMetadata(
+                classes: baseAnalysis.metadata.classes,
+                protocols: [],
+                categories: [category]
+            )
+        )
+        let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
+        let model = WorkspaceModel(loader: SuccessfulLoader(target: loadedTarget))
+
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+        model.classSearch = "Extras"
+
+        let categoryTarget = try XCTUnwrap(model.filteredClasses.first)
+        XCTAssertEqual(categoryTarget.name, "ExternalController")
+        XCTAssertTrue(categoryTarget.isCategoryOnly)
+        XCTAssertEqual(categoryTarget.categoryNames, ["Extras"])
+        XCTAssertEqual(categoryTarget.protocols, ["FeatureProviding"])
+        XCTAssertEqual(model.methodSearchMatches(for: categoryTarget).count, 2)
+        let property = try XCTUnwrap(categoryTarget.properties.first)
+        XCTAssertEqual(property.property.accessorSelectors.getter, "featureEnabled")
+        XCTAssertEqual(property.property.accessorSelectors.setter, "setFeatureEnabled:")
+
+        let method = try XCTUnwrap(
+            categoryTarget.method(kind: .instance, selector: "featureEnabled")
+        )
+        let patch = try model.addPatch(className: categoryTarget.name, method: method)
+        model.navigation = .build
+        model.inspectPatch(patch)
+
+        XCTAssertEqual(model.navigation, .objectiveCClass(categoryTarget.id))
+        XCTAssertEqual(model.selectedMethodID, method.id)
+        XCTAssertEqual(model.methodRevealRequest?.methodID, method.id)
         XCTAssertNil(model.workspaceAlert)
     }
 
@@ -1037,7 +1120,8 @@ final class WorkspaceModelTests: XCTestCase {
             architectureReport: ArchitectureResolver.report(for: inspection.slices),
             iconData: nil,
             analysisState: .requiresSliceSelection,
-            patchabilityReport: nil
+            patchabilityReport: nil,
+            classBrowserTargets: []
         )
     }
 
@@ -1121,7 +1205,8 @@ private struct SuccessfulLoader: TargetLoading {
         guard let analysis else { throw StubError.failed }
         return LoadedObjectiveCAnalysis(
             analysis: analysis,
-            patchabilityReport: ObjectiveCPatchabilityAnalyzer.report(for: analysis.metadata)
+            patchabilityReport: ObjectiveCPatchabilityAnalyzer.report(for: analysis.metadata),
+            classBrowserTargets: ObjectiveCClassBrowserCatalog.targets(for: analysis)
         )
     }
 }

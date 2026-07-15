@@ -2,7 +2,7 @@ import MachPatchCore
 import SwiftUI
 
 struct ClassBrowserView: View {
-    let objectiveCClass: ObjectiveCClass
+    let objectiveCClass: ObjectiveCClassBrowserTarget
     @ObservedObject var model: WorkspaceModel
 
     @State private var methodSearch = ""
@@ -14,9 +14,12 @@ struct ClassBrowserView: View {
             GeometryReader { geometry in
                 let layout = ClassBrowserColumnLayout(availableWidth: geometry.size.width)
                 HStack(spacing: 0) {
-                    ClassMetadataPanel(objectiveCClass: objectiveCClass)
-                        .frame(width: layout.metadataWidth)
-                        .clipped()
+                    ClassMetadataPanel(
+                        objectiveCClass: objectiveCClass,
+                        selectMethod: revealMethod
+                    )
+                    .frame(width: layout.metadataWidth)
+                    .clipped()
                     Divider()
                     methodList
                         .frame(width: layout.methodWidth)
@@ -39,11 +42,15 @@ struct ClassBrowserView: View {
 
     private var classHeader: some View {
         HStack(alignment: .top, spacing: 14) {
-            Image(systemName: objectiveCClass.isObjectiveCVisibleSwift ? "swift" : "cube.fill")
-                .font(.system(size: 30))
-                .foregroundStyle(.tint)
-                .frame(width: 52, height: 52)
-                .background(.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+            Image(
+                systemName: objectiveCClass.isCategoryOnly
+                    ? "square.stack.3d.up"
+                    : objectiveCClass.isObjectiveCVisibleSwift ? "swift" : "cube.fill"
+            )
+            .font(.system(size: 30))
+            .foregroundStyle(objectiveCClass.isCategoryOnly ? Color.purple : Color.accentColor)
+            .frame(width: 52, height: 52)
+            .background(.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
 
             VStack(alignment: .leading, spacing: 5) {
                 Text(objectiveCClass.name)
@@ -61,6 +68,10 @@ struct ClassBrowserView: View {
                         Text("Objective-C-visible Swift")
                             .foregroundStyle(.orange)
                     }
+                    if objectiveCClass.isCategoryOnly {
+                        Text("Category-only runtime target")
+                            .foregroundStyle(.purple)
+                    }
                 }
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -76,11 +87,21 @@ struct ClassBrowserView: View {
                 .textFieldStyle(.roundedBorder)
                 .padding(12)
             Divider()
-            List(selection: $model.selectedMethodID) {
-                methodSection("Instance Methods", methods: filteredInstanceMethods)
-                methodSection("Class Methods", methods: filteredClassMethods)
+            ScrollViewReader { proxy in
+                List(selection: $model.selectedMethodID) {
+                    methodSection("Instance Methods", methods: filteredInstanceMethods)
+                    methodSection("Class Methods", methods: filteredClassMethods)
+                }
+                .listStyle(.inset)
+                .onChange(of: model.methodRevealRequest) { _, request in
+                    guard let request else { return }
+                    scrollToMethod(request, with: proxy)
+                }
+                .onAppear {
+                    guard let request = model.methodRevealRequest else { return }
+                    scrollToMethod(request, with: proxy)
+                }
             }
-            .listStyle(.inset)
         }
     }
 
@@ -102,7 +123,10 @@ struct ClassBrowserView: View {
     }
 
     @ViewBuilder
-    private func methodSection(_ title: String, methods: [ObjectiveCMethod]) -> some View {
+    private func methodSection(
+        _ title: String,
+        methods: [ObjectiveCCanonicalMethod]
+    ) -> some View {
         if !methods.isEmpty {
             Section("\(title) · \(methods.count)") {
                 ForEach(methods) { method in
@@ -113,33 +137,58 @@ struct ClassBrowserView: View {
                             method: method
                         ) != nil
                     )
+                    .id(method.id)
                     .tag(method.id)
                 }
             }
         }
     }
 
-    private var filteredInstanceMethods: [ObjectiveCMethod] {
+    private var filteredInstanceMethods: [ObjectiveCCanonicalMethod] {
         filtered(objectiveCClass.instanceMethods)
     }
 
-    private var filteredClassMethods: [ObjectiveCMethod] {
+    private var filteredClassMethods: [ObjectiveCCanonicalMethod] {
         filtered(objectiveCClass.classMethods)
     }
 
-    private var selectedMethod: ObjectiveCMethod? {
+    private var selectedMethod: ObjectiveCCanonicalMethod? {
         guard let selectedMethodID = model.selectedMethodID else { return nil }
-        return (objectiveCClass.instanceMethods + objectiveCClass.classMethods).first {
-            $0.id == selectedMethodID
-        }
+        return objectiveCClass.methods.first { $0.id == selectedMethodID }
     }
 
-    private func filtered(_ methods: [ObjectiveCMethod]) -> [ObjectiveCMethod] {
+    private func filtered(
+        _ methods: [ObjectiveCCanonicalMethod]
+    ) -> [ObjectiveCCanonicalMethod] {
         let query = methodSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return methods }
         return methods.filter {
             $0.selector.localizedCaseInsensitiveContains(query)
                 || $0.typeEncoding?.localizedCaseInsensitiveContains(query) == true
+                || $0.categoryNames.contains(where: {
+                    $0.localizedCaseInsensitiveContains(query)
+                })
+        }
+    }
+
+    private func revealMethod(_ method: ObjectiveCCanonicalMethod) {
+        methodSearch = ""
+        model.revealMethod(method)
+    }
+
+    private func scrollToMethod(
+        _ request: MethodRevealRequest,
+        with proxy: ScrollViewProxy
+    ) {
+        guard objectiveCClass.methods.contains(where: { $0.id == request.methodID }) else {
+            return
+        }
+        Task { @MainActor in
+            await Task.yield()
+            withAnimation(.easeInOut(duration: 0.18)) {
+                proxy.scrollTo(request.methodID, anchor: .center)
+            }
+            model.consumeMethodRevealRequest(id: request.id)
         }
     }
 }
@@ -177,13 +226,14 @@ struct ClassBrowserColumnLayout: Equatable {
 }
 
 private struct ClassMetadataPanel: View {
-    let objectiveCClass: ObjectiveCClass
+    let objectiveCClass: ObjectiveCClassBrowserTarget
+    let selectMethod: (ObjectiveCCanonicalMethod) -> Void
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 metadataSection("Origin") {
-                    metadataValue("Image", objectiveCClass.imageName ?? "Unknown")
+                    metadataValue("Image", objectiveCClass.imageName)
                     metadataValue("Superclass", objectiveCClass.superclassName ?? "None")
                 }
 
@@ -197,17 +247,26 @@ private struct ClassMetadataPanel: View {
                     }
                 }
 
+                metadataSection("Categories · \(objectiveCClass.categoryNames.count)") {
+                    if objectiveCClass.categoryNames.isEmpty {
+                        emptyValue
+                    } else {
+                        ForEach(objectiveCClass.categoryNames, id: \.self) { categoryName in
+                            Text(categoryName)
+                        }
+                    }
+                }
+
                 metadataSection("Properties · \(objectiveCClass.properties.count)") {
                     if objectiveCClass.properties.isEmpty {
                         emptyValue
                     } else {
                         ForEach(objectiveCClass.properties) { property in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(property.name)
-                                Text(property.attributes)
-                                    .font(.caption.monospaced())
-                                    .foregroundStyle(.secondary)
-                            }
+                            PropertyMetadataRow(
+                                item: property,
+                                objectiveCClass: objectiveCClass,
+                                selectMethod: selectMethod
+                            )
                         }
                     }
                 }
@@ -259,8 +318,78 @@ private struct ClassMetadataPanel: View {
     }
 }
 
+private struct PropertyMetadataRow: View {
+    let item: ObjectiveCPropertyBrowserItem
+    let objectiveCClass: ObjectiveCClassBrowserTarget
+    let selectMethod: (ObjectiveCCanonicalMethod) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(item.property.name)
+            Text(item.property.attributes)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+            if let categoryName = item.categoryName {
+                Text("Category: \(categoryName)")
+                    .font(.caption)
+                    .foregroundStyle(.purple)
+            }
+            HStack(spacing: 8) {
+                accessorButton("Getter", selector: accessors.getter, method: getterMethod)
+                if accessors.isReadOnly {
+                    Text("Read-only")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    accessorButton("Setter", selector: accessors.setter, method: setterMethod)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func accessorButton(
+        _ label: String,
+        selector: String?,
+        method: ObjectiveCCanonicalMethod?
+    ) -> some View {
+        if let method {
+            Button(label) {
+                selectMethod(method)
+            }
+            .buttonStyle(.link)
+            .font(.caption)
+            .help(
+                "Open \(method.kind == .instance ? "−" : "+")[\(objectiveCClass.name) \(method.selector)]"
+            )
+        } else if selector != nil {
+            Text("\(label) missing")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .help("The metadata does not declare this property accessor.")
+        }
+    }
+
+    private var accessors: ObjectiveCPropertyAccessorSelectors {
+        item.property.accessorSelectors
+    }
+
+    private var getterMethod: ObjectiveCCanonicalMethod? {
+        accessors.getter.flatMap(resolveAccessor)
+    }
+
+    private var setterMethod: ObjectiveCCanonicalMethod? {
+        accessors.setter.flatMap(resolveAccessor)
+    }
+
+    private func resolveAccessor(_ selector: String) -> ObjectiveCCanonicalMethod? {
+        objectiveCClass.method(kind: .instance, selector: selector)
+            ?? objectiveCClass.method(kind: .class, selector: selector)
+    }
+}
+
 private struct MethodListRow: View {
-    let method: ObjectiveCMethod
+    let method: ObjectiveCCanonicalMethod
     let isPatched: Bool
 
     var body: some View {
@@ -271,10 +400,20 @@ private struct MethodListRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(method.selector)
                     .lineLimit(1)
-                Text(method.typeEncoding ?? "Type encoding unavailable")
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                Text(
+                    method.hasConflictingTypeEncodings
+                        ? "Conflicting type encodings"
+                        : method.typeEncoding ?? "Type encoding unavailable"
+                )
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                if !method.categoryNames.isEmpty {
+                    Text("Category: \(method.categoryNames.joined(separator: ", "))")
+                        .font(.caption)
+                        .foregroundStyle(.purple)
+                        .lineLimit(1)
+                }
             }
             Spacer(minLength: 4)
             if isPatched {
@@ -287,8 +426,8 @@ private struct MethodListRow: View {
 }
 
 private struct MethodInspectorView: View {
-    let objectiveCClass: ObjectiveCClass
-    let method: ObjectiveCMethod
+    let objectiveCClass: ObjectiveCClassBrowserTarget
+    let method: ObjectiveCCanonicalMethod
     @ObservedObject var model: WorkspaceModel
 
     var body: some View {
@@ -307,6 +446,31 @@ private struct MethodInspectorView: View {
                     Text(method.typeEncoding ?? "Unavailable")
                         .font(.body.monospaced())
                         .textSelection(.enabled)
+                }
+
+                inspectorSection("Declaration Origin") {
+                    if method.hasClassDeclaration {
+                        Label("Class declaration", systemImage: "cube")
+                    }
+                    ForEach(method.categoryNames, id: \.self) { categoryName in
+                        Label("Category \(categoryName)", systemImage: "square.stack.3d.up")
+                            .foregroundStyle(.purple)
+                    }
+                }
+
+                if method.hasConflictingTypeEncodings {
+                    inspectorSection("Conflicting Type Encodings") {
+                        Label(
+                            "These declarations disagree, so MachPatch will not create a patch.",
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
+                        .foregroundStyle(.red)
+                        ForEach(method.conflictingTypeEncodings, id: \.self) { encoding in
+                            Text(encoding)
+                                .font(.caption.monospaced())
+                                .textSelection(.enabled)
+                        }
+                    }
                 }
 
                 if let signature {
@@ -337,6 +501,14 @@ private struct MethodInspectorView: View {
                     inspectorSection("Decoded Signature") {
                         Label(
                             "The type encoding could not be decoded safely.",
+                            systemImage: "exclamationmark.triangle"
+                        )
+                        .foregroundStyle(.orange)
+                    }
+                } else if !method.hasConflictingTypeEncodings {
+                    inspectorSection("Decoded Signature") {
+                        Label(
+                            "No type encoding was recovered, so MachPatch cannot create an ABI-safe patch.",
                             systemImage: "exclamationmark.triangle"
                         )
                         .foregroundStyle(.orange)
@@ -381,8 +553,8 @@ private struct MethodInspectorView: View {
 }
 
 private struct PatchEditorView: View {
-    let objectiveCClass: ObjectiveCClass
-    let method: ObjectiveCMethod
+    let objectiveCClass: ObjectiveCClassBrowserTarget
+    let method: ObjectiveCCanonicalMethod
     let signature: ObjectiveCMethodSignature
     @ObservedObject var model: WorkspaceModel
 

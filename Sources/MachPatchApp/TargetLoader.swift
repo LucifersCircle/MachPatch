@@ -39,7 +39,8 @@ struct TargetLoader: TargetLoading {
                     architectureReport: architectureReport,
                     iconData: TargetIconLoader().loadIconData(for: target),
                     analysisState: initialAnalysis.state,
-                    patchabilityReport: initialAnalysis.report
+                    patchabilityReport: initialAnalysis.report,
+                    classBrowserTargets: initialAnalysis.classBrowserTargets
                 )
             }
         }.value
@@ -77,7 +78,8 @@ struct TargetLoader: TargetLoading {
                     analysis: analysis,
                     patchabilityReport: ObjectiveCPatchabilityAnalyzer.report(
                         for: analysis.metadata
-                    )
+                    ),
+                    classBrowserTargets: ObjectiveCClassBrowserCatalog.targets(for: analysis)
                 )
             }
         }.value
@@ -86,23 +88,32 @@ struct TargetLoader: TargetLoading {
     private func initialAnalysis(
         target: ResolvedTarget,
         architectureReport: TargetArchitectureReport
-    ) -> (state: TargetAnalysisState, report: ObjectiveCPatchabilityReport?) {
+    ) -> (
+        state: TargetAnalysisState,
+        report: ObjectiveCPatchabilityReport?,
+        classBrowserTargets: [ObjectiveCClassBrowserTarget]
+    ) {
         let supportedSlices = architectureReport.slices.filter(\.supportedForPatching)
         guard !supportedSlices.isEmpty else {
-            return (.unavailable(architectureReport.automaticReason), nil)
+            return (.unavailable(architectureReport.automaticReason), nil, [])
         }
         guard supportedSlices.count == 1, let slice = supportedSlices.first else {
-            return (.requiresSliceSelection, nil)
+            return (.requiresSliceSelection, nil, [])
         }
 
         do {
             let analysis = try ObjectiveCAnalyzer().analyze(target, sliceIndex: slice.index)
             return (
                 .loaded(analysis),
-                ObjectiveCPatchabilityAnalyzer.report(for: analysis.metadata)
+                ObjectiveCPatchabilityAnalyzer.report(for: analysis.metadata),
+                ObjectiveCClassBrowserCatalog.targets(for: analysis)
             )
         } catch {
-            return (.failed(sliceIndex: slice.index, message: error.localizedDescription), nil)
+            return (
+                .failed(sliceIndex: slice.index, message: error.localizedDescription),
+                nil,
+                []
+            )
         }
     }
 }

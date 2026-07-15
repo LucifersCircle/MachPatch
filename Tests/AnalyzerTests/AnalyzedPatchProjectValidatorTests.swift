@@ -60,6 +60,65 @@ final class AnalyzedPatchProjectValidatorTests: XCTestCase {
         XCTAssertTrue(report.errors.contains { $0.code == .typeEncodingChanged })
     }
 
+    func testValidatesCategoryOnlyRuntimeTarget() throws {
+        let fixture = try FixtureAnalysis()
+        defer { fixture.remove() }
+        let analysis = replacingMetadata(
+            in: fixture.analysis,
+            with: ObjectiveCMetadata(
+                classes: [],
+                protocols: [],
+                categories: [
+                    category(
+                        name: "Extras",
+                        className: "ExternalController",
+                        encoding: "B16@0:8"
+                    )
+                ]
+            )
+        )
+
+        let report = try AnalyzedPatchProjectValidator.validate(
+            makeProject(className: "ExternalController"),
+            against: analysis
+        )
+
+        XCTAssertTrue(report.isValid)
+    }
+
+    func testRejectsConflictingCategoryTypeEncodings() throws {
+        let fixture = try FixtureAnalysis()
+        defer { fixture.remove() }
+        let analysis = replacingMetadata(
+            in: fixture.analysis,
+            with: ObjectiveCMetadata(
+                classes: [],
+                protocols: [],
+                categories: [
+                    category(
+                        name: "One",
+                        className: "ExternalController",
+                        encoding: "B16@0:8"
+                    ),
+                    category(
+                        name: "Two",
+                        className: "ExternalController",
+                        encoding: "q16@0:8"
+                    ),
+                ]
+            )
+        )
+
+        let report = try AnalyzedPatchProjectValidator.validate(
+            makeProject(className: "ExternalController"),
+            against: analysis
+        )
+
+        XCTAssertTrue(
+            report.errors.contains { $0.code == .conflictingMethodTypeEncodings }
+        )
+    }
+
     func testSeparatesRetargetingWarningsFromSliceErrors() throws {
         let fixture = try FixtureAnalysis()
         defer { fixture.remove() }
@@ -173,6 +232,44 @@ final class AnalyzedPatchProjectValidatorTests: XCTestCase {
             ]
         )
     }
+}
+
+private func replacingMetadata(
+    in analysis: ObjectiveCAnalysis,
+    with metadata: ObjectiveCMetadata
+) -> ObjectiveCAnalysis {
+    ObjectiveCAnalysis(
+        target: analysis.target,
+        sliceIndex: analysis.sliceIndex,
+        architecture: analysis.architecture,
+        backend: analysis.backend,
+        warnings: analysis.warnings,
+        metadata: metadata
+    )
+}
+
+private func category(
+    name: String,
+    className: String,
+    encoding: String
+) -> ObjectiveCCategory {
+    ObjectiveCCategory(
+        id: "category-\(name)",
+        name: name,
+        className: className,
+        instanceMethods: [
+            ObjectiveCMethod(
+                id: "method-\(name)",
+                selector: "featureEnabled",
+                kind: .instance,
+                typeEncoding: encoding,
+                implementationAddress: nil
+            )
+        ],
+        classMethods: [],
+        properties: [],
+        protocols: []
+    )
 }
 
 private struct FixtureAnalysis {

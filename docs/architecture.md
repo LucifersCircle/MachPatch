@@ -104,6 +104,14 @@ sorted, and assigned deterministic IDs at the shared boundary.
 executable and the class name did not match a small known third-party SDK marker list. It must
 never be presented as conclusive first-party ownership.
 
+`ObjectiveCMethodCatalog` canonicalizes class and category declarations by runtime class, method
+kind, and selector. Equal nonempty encodings share one browser and validation record while
+preserving every declaration origin. Conflicting encodings are never guessed: the method remains
+visible with a blocking diagnostic. Category owners that have no class declaration in the current
+image become explicit category-only runtime targets in the app and CLI. Property metadata is
+linked only to getter/setter selectors that the catalog actually contains, including custom
+runtime accessor attributes.
+
 ## Patch schema and type decoding
 
 `MachPatchCore` owns the versioned project model, deterministic JSON codec, Objective-C type

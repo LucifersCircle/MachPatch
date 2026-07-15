@@ -209,7 +209,8 @@ struct MachPatchCommand {
                         architecture: analysis.architecture,
                         backend: analysis.backend,
                         warnings: analysis.warnings,
-                        classes: analysis.metadata.classes.map(ObjectiveCClassSummary.init)
+                        classes: analysis.metadata.classes.map(ObjectiveCClassSummary.init),
+                        categoryOwners: categoryOwnerSummaries(in: analysis.metadata)
                     )
                 )
             }
@@ -224,12 +225,16 @@ struct MachPatchCommand {
             try InputResolver().withResolvedTarget(at: URL(filePath: path)) { target in
                 let analysis = try ObjectiveCAnalyzer().analyze(target)
                 guard
-                    let objectiveCClass = analysis.metadata.classes.first(where: {
-                        $0.name == className
-                    })
+                    ObjectiveCMethodCatalog.ownerClassNames(in: analysis.metadata).contains(
+                        className
+                    )
                 else {
                     throw CLIError("Objective-C class was not found: \(className)")
                 }
+                let methods = ObjectiveCMethodCatalog.methods(
+                    forClassNamed: className,
+                    in: analysis.metadata
+                )
                 try writeJSON(
                     MethodListOutput(
                         target: analysis.target,
@@ -237,15 +242,40 @@ struct MachPatchCommand {
                         architecture: analysis.architecture,
                         backend: analysis.backend,
                         warnings: analysis.warnings,
-                        className: objectiveCClass.name,
-                        instanceMethods: objectiveCClass.instanceMethods,
-                        classMethods: objectiveCClass.classMethods
+                        className: className,
+                        categoryNames: analysis.metadata.categories.filter {
+                            $0.className == className
+                        }.map(\.name).sorted(),
+                        instanceMethods: methods.filter { $0.kind == .instance },
+                        classMethods: methods.filter { $0.kind == .class }
                     )
                 )
             }
         } catch {
             writeError("error: \(error.localizedDescription)\n")
             exit(EXIT_FAILURE)
+        }
+    }
+
+    private static func categoryOwnerSummaries(
+        in metadata: ObjectiveCMetadata
+    ) -> [ObjectiveCCategoryOwnerSummary] {
+        let classNames = Set(metadata.classes.map(\.name))
+        return Array(Set(metadata.categories.map(\.className))).sorted().map { className in
+            let categories = metadata.categories.filter { $0.className == className }
+            let methods = ObjectiveCMethodCatalog.methods(
+                forClassNamed: className,
+                in: metadata
+            )
+            return ObjectiveCCategoryOwnerSummary(
+                className: className,
+                hasClassDeclaration: classNames.contains(className),
+                categoryNames: categories.map(\.name).sorted(),
+                instanceMethodCount: methods.count(where: { $0.kind == .instance }),
+                classMethodCount: methods.count(where: { $0.kind == .class }),
+                propertyCount: categories.reduce(0) { $0 + $1.properties.count },
+                protocols: Array(Set(categories.flatMap(\.protocols))).sorted()
+            )
         }
     }
 
@@ -447,6 +477,17 @@ private struct ClassListOutput: Encodable {
     let backend: ObjectiveCAnalyzerBackend
     let warnings: [String]
     let classes: [ObjectiveCClassSummary]
+    let categoryOwners: [ObjectiveCCategoryOwnerSummary]
+}
+
+private struct ObjectiveCCategoryOwnerSummary: Encodable {
+    let className: String
+    let hasClassDeclaration: Bool
+    let categoryNames: [String]
+    let instanceMethodCount: Int
+    let classMethodCount: Int
+    let propertyCount: Int
+    let protocols: [String]
 }
 
 private struct ObjectiveCClassSummary: Encodable {
@@ -482,8 +523,9 @@ private struct MethodListOutput: Encodable {
     let backend: ObjectiveCAnalyzerBackend
     let warnings: [String]
     let className: String
-    let instanceMethods: [ObjectiveCMethod]
-    let classMethods: [ObjectiveCMethod]
+    let categoryNames: [String]
+    let instanceMethods: [ObjectiveCCanonicalMethod]
+    let classMethods: [ObjectiveCCanonicalMethod]
 }
 
 private struct PatchabilityCommandOutput: Encodable {
@@ -504,7 +546,7 @@ private enum HumanPatchabilityReportFormatter {
             "Metadata backend: \(output.backend.rawValue)",
             "Method declarations: \(summary.methodCount)",
             "Available in editor: \(summary.patchableClassMethodCount)",
-            "Additional patchable category declarations: \(summary.patchableCategoryMethodCount)",
+            "Patchable category declarations: \(summary.patchableCategoryMethodCount)",
             "Unavailable declarations: \(summary.unavailableMethodCount)",
         ]
 

@@ -129,8 +129,7 @@ public enum AnalyzedPatchProjectValidator {
         metadata: ObjectiveCMetadata,
         errors: inout [PatchProjectValidationIssue]
     ) {
-        guard let objectiveCClass = metadata.classes.first(where: { $0.name == patch.className })
-        else {
+        guard ObjectiveCMethodCatalog.ownerClassNames(in: metadata).contains(patch.className) else {
             errors.append(
                 issue(
                     .classNotFound,
@@ -141,18 +140,23 @@ public enum AnalyzedPatchProjectValidator {
             return
         }
 
-        let selectedMethods =
-            patch.methodKind == .instance
-            ? objectiveCClass.instanceMethods : objectiveCClass.classMethods
-        let oppositeMethods =
-            patch.methodKind == .instance
-            ? objectiveCClass.classMethods : objectiveCClass.instanceMethods
+        let method = ObjectiveCMethodCatalog.method(
+            forClassNamed: patch.className,
+            kind: patch.methodKind,
+            selector: patch.selector,
+            in: metadata
+        )
+        let oppositeKind: ObjectiveCMethodKind =
+            patch.methodKind == .instance ? .class : .instance
 
-        guard let method = selectedMethods.first(where: { $0.selector == patch.selector }) else {
+        guard let method else {
             let code: PatchProjectValidationCode =
-                oppositeMethods.contains {
-                    $0.selector == patch.selector
-                } ? .methodKindMismatch : .methodNotFound
+                ObjectiveCMethodCatalog.method(
+                    forClassNamed: patch.className,
+                    kind: oppositeKind,
+                    selector: patch.selector,
+                    in: metadata
+                ) == nil ? .methodNotFound : .methodKindMismatch
             let marker = patch.methodKind == .instance ? "-" : "+"
             errors.append(
                 issue(
@@ -160,6 +164,17 @@ public enum AnalyzedPatchProjectValidator {
                     code == .methodKindMismatch
                         ? "Selector exists on \(patch.className), but not as a \(patch.methodKind.rawValue) method."
                         : "Method was not found: \(marker)[\(patch.className) \(patch.selector)]",
+                    patchID: patch.id
+                )
+            )
+            return
+        }
+
+        guard !method.hasConflictingTypeEncodings else {
+            errors.append(
+                issue(
+                    .conflictingMethodTypeEncodings,
+                    "Method declarations disagree on the runtime type encoding: \(method.conflictingTypeEncodings.joined(separator: ", ")).",
                     patchID: patch.id
                 )
             )

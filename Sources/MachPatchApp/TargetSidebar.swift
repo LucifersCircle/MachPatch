@@ -106,6 +106,10 @@ struct TargetSidebar: View {
     private func analysisNavigation(_ loadedTarget: LoadedTarget) -> some View {
         switch loadedTarget.analysisState {
         case .loaded(let analysis):
+            let filteredClasses = model.filteredClasses.filter { !$0.isCategoryOnly }
+            let filteredCategoryTargets = model.filteredClasses.filter(\.isCategoryOnly)
+            let categoryTargetCount = loadedTarget.classBrowserTargets.count(
+                where: \.isCategoryOnly)
             Section {
                 TextField("Search classes or methods", text: $model.classSearch)
                     .textFieldStyle(.roundedBorder)
@@ -120,32 +124,20 @@ struct TargetSidebar: View {
             }
 
             Section(
-                "Classes · \(model.filteredClasses.count) of \(analysis.metadata.classes.count)"
+                "Classes · \(filteredClasses.count) of \(analysis.metadata.classes.count)"
             ) {
-                ForEach(model.filteredClasses) { objectiveCClass in
-                    let methodMatches = model.methodSearchMatches(for: objectiveCClass)
-                    Label {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(objectiveCClass.name)
-                                .lineLimit(1)
-                            if let firstMatch = methodMatches.first {
-                                Text(methodMatchSummary(firstMatch, total: methodMatches.count))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                    .help(methodMatchHelp(methodMatches))
-                            } else if let superclass = objectiveCClass.superclassName {
-                                Text(superclass)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                        }
-                    } icon: {
-                        Image(systemName: classIcon(objectiveCClass))
-                            .foregroundStyle(classIconColor(objectiveCClass))
+                ForEach(filteredClasses) { objectiveCClass in
+                    classRow(objectiveCClass)
+                }
+            }
+
+            if categoryTargetCount > 0 {
+                Section(
+                    "Category Targets · \(filteredCategoryTargets.count) of \(categoryTargetCount)"
+                ) {
+                    ForEach(filteredCategoryTargets) { objectiveCClass in
+                        classRow(objectiveCClass)
                     }
-                    .tag(WorkspaceNavigation.objectiveCClass(objectiveCClass.id))
                 }
             }
         case .requiresSliceSelection:
@@ -184,8 +176,45 @@ struct TargetSidebar: View {
         }
     }
 
-    private func classIcon(_ objectiveCClass: ObjectiveCClass) -> String {
-        if objectiveCClass.isObjectiveCVisibleSwift {
+    private func classRow(_ objectiveCClass: ObjectiveCClassBrowserTarget) -> some View {
+        let methodMatches = model.methodSearchMatches(for: objectiveCClass)
+        return Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(objectiveCClass.name)
+                    .lineLimit(1)
+                if let firstMatch = methodMatches.first {
+                    Text(methodMatchSummary(firstMatch, total: methodMatches.count))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .help(methodMatchHelp(methodMatches))
+                } else if let superclass = objectiveCClass.superclassName {
+                    Text(superclass)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                } else if let categoryName = objectiveCClass.categoryNames.first {
+                    Text(
+                        objectiveCClass.categoryNames.count == 1
+                            ? categoryName
+                            : "\(categoryName) + \(objectiveCClass.categoryNames.count - 1) more"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.purple)
+                    .lineLimit(1)
+                }
+            }
+        } icon: {
+            Image(systemName: classIcon(objectiveCClass))
+                .foregroundStyle(classIconColor(objectiveCClass))
+        }
+        .tag(WorkspaceNavigation.objectiveCClass(objectiveCClass.id))
+    }
+
+    private func classIcon(_ objectiveCClass: ObjectiveCClassBrowserTarget) -> String {
+        if objectiveCClass.isCategoryOnly {
+            "square.stack.3d.up"
+        } else if objectiveCClass.isObjectiveCVisibleSwift {
             "swift"
         } else if objectiveCClass.isLikelyAppDefined {
             "cube.fill"
@@ -194,23 +223,26 @@ struct TargetSidebar: View {
         }
     }
 
-    private func classIconColor(_ objectiveCClass: ObjectiveCClass) -> Color {
+    private func classIconColor(_ objectiveCClass: ObjectiveCClassBrowserTarget) -> Color {
         if model.navigation == .objectiveCClass(objectiveCClass.id) {
             return Color(nsColor: .alternateSelectedControlTextColor)
         }
         if objectiveCClass.isObjectiveCVisibleSwift {
             return .orange
         }
+        if objectiveCClass.isCategoryOnly {
+            return .purple
+        }
         return objectiveCClass.isLikelyAppDefined ? .accentColor : .secondary
     }
 
-    private func methodMatchSummary(_ method: ObjectiveCMethod, total: Int) -> String {
+    private func methodMatchSummary(_ method: ObjectiveCCanonicalMethod, total: Int) -> String {
         let marker = method.kind == .instance ? "−" : "+"
         let remainder = total > 1 ? " + \(total - 1) more" : ""
         return "Method: \(marker)\(method.selector)\(remainder)"
     }
 
-    private func methodMatchHelp(_ methods: [ObjectiveCMethod]) -> String {
+    private func methodMatchHelp(_ methods: [ObjectiveCCanonicalMethod]) -> String {
         "Matched methods:\n"
             + methods.map {
                 let marker = $0.kind == .instance ? "−" : "+"

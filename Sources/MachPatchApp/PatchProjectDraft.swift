@@ -145,6 +145,7 @@ enum PatchDraftError: LocalizedError, Equatable {
     case typeEncodingUnavailable
     case invalidTypeEncoding(String)
     case unsupportedSignature
+    case conflictingTypeEncodings([String])
 
     var errorDescription: String? {
         switch self {
@@ -156,6 +157,8 @@ enum PatchDraftError: LocalizedError, Equatable {
             "This method's type encoding could not be decoded: \(message)"
         case .unsupportedSignature:
             "No version 1 patch action supports this method's complete ABI signature."
+        case .conflictingTypeEncodings(let encodings):
+            "Method declarations disagree on the type encoding: \(encodings.joined(separator: ", "))."
         }
     }
 }

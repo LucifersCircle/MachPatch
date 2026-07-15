@@ -10,10 +10,12 @@ struct LoadedTarget: Equatable, Sendable {
     let iconData: Data?
     let analysisState: TargetAnalysisState
     let patchabilityReport: ObjectiveCPatchabilityReport?
+    let classBrowserTargets: [ObjectiveCClassBrowserTarget]
 
     func replacingAnalysisState(
         _ state: TargetAnalysisState,
-        patchabilityReport: ObjectiveCPatchabilityReport? = nil
+        patchabilityReport: ObjectiveCPatchabilityReport? = nil,
+        classBrowserTargets: [ObjectiveCClassBrowserTarget]? = nil
     ) -> LoadedTarget {
         let resolvedPatchabilityReport: ObjectiveCPatchabilityReport?
         if let patchabilityReport {
@@ -25,6 +27,14 @@ struct LoadedTarget: Equatable, Sendable {
         } else {
             resolvedPatchabilityReport = nil
         }
+        let resolvedClassBrowserTargets: [ObjectiveCClassBrowserTarget]
+        if let classBrowserTargets {
+            resolvedClassBrowserTargets = classBrowserTargets
+        } else if case .loaded(let analysis) = state {
+            resolvedClassBrowserTargets = ObjectiveCClassBrowserCatalog.targets(for: analysis)
+        } else {
+            resolvedClassBrowserTargets = []
+        }
         return LoadedTarget(
             inputURL: inputURL,
             target: target,
@@ -32,7 +42,8 @@ struct LoadedTarget: Equatable, Sendable {
             architectureReport: architectureReport,
             iconData: iconData,
             analysisState: state,
-            patchabilityReport: resolvedPatchabilityReport
+            patchabilityReport: resolvedPatchabilityReport,
+            classBrowserTargets: resolvedClassBrowserTargets
         )
     }
 }
@@ -40,6 +51,7 @@ struct LoadedTarget: Equatable, Sendable {
 struct LoadedObjectiveCAnalysis: Equatable, Sendable {
     let analysis: ObjectiveCAnalysis
     let patchabilityReport: ObjectiveCPatchabilityReport
+    let classBrowserTargets: [ObjectiveCClassBrowserTarget]
 }
 
 enum TargetAnalysisState: Equatable, Sendable {

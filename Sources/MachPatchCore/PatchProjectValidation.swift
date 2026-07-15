@@ -68,6 +68,7 @@ public enum PatchProjectValidationCode: String, Codable, Equatable, Sendable {
     case classNotFound
     case methodNotFound
     case methodKindMismatch
+    case conflictingMethodTypeEncodings
     case typeEncodingChanged
 }
 
