@@ -106,7 +106,7 @@ public struct ObjectiveCMethod: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
-public enum ObjectiveCMethodKind: String, Codable, Equatable, Sendable {
+public enum ObjectiveCMethodKind: String, Codable, Equatable, Hashable, Sendable {
     case instance
     case `class`
 }

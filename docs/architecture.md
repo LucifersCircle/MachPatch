@@ -102,6 +102,17 @@ sorted, and assigned deterministic IDs at the shared boundary.
 executable and the class name did not match a small known third-party SDK marker list. It must
 never be presented as conclusive first-party ownership.
 
+## Patch schema and type decoding
+
+`MachPatchCore` owns the versioned project model, deterministic JSON codec, Objective-C type
+decoder, and target-independent validation. This lets the CLI, future GUI, generator, and verifier
+share one action-compatibility decision.
+
+The type decoder separates type tokens from method frame sizes and argument offsets. It recognizes
+unsupported ABI shapes so validation can reject them explicitly instead of misclassifying them.
+`MachPatchAnalyzer` adds target-backed validation by selecting the exact architecture/subtype and
+checking the current class, selector, method kind, and raw encoding.
+
 ## Design constraints
 
 - Report unknown architecture and ABI values explicitly; never silently guess.
@@ -122,3 +133,5 @@ never be presented as conclusive first-party ownership.
    libraries.
 4. Extract and normalize Objective-C classes, methods, properties, ivars, protocols, and
    categories behind a replaceable provider boundary.
+5. Round-trip patch schema version 1, decode Objective-C method signatures, and validate actions
+   structurally or against a current target.

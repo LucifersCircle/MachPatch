@@ -109,6 +109,25 @@ address relationship.
 Both commands reject an encrypted slice before metadata extraction. `--json` is accepted for
 script compatibility; JSON is the only output format during the CLI-first implementation.
 
+## Validate a patch project
+
+Patch projects are versioned JSON with immutable target identity, build settings, method patches,
+and type-safe actions. Validate the schema and action/type compatibility with:
+
+```bash
+.build/debug/machpatch validate-project Examples/ExamplePatch.json
+```
+
+Add a current IPA, app, or executable to verify its exact class, selector, method kind, selected
+slice, and raw type encoding:
+
+```bash
+.build/debug/machpatch validate-project patch.json --target "/path/to/Fixture.ipa"
+```
+
+See [docs/patch-format.md](docs/patch-format.md) for the version 1 schema, supported actions, and
+MVP type rules.
+
 ## Development tools
 
 The repository includes configuration for `swift-format` and SwiftLint. When those tools are
@@ -127,6 +146,7 @@ and implementation constraints.
 
 ## Project status
 
-Safe input resolution, native thin/fat Mach-O inspection, and normalized Objective-C metadata
-extraction are implemented. Patch schema and type decoding are the next command-line milestone;
-the macOS interface remains deferred until the complete CLI pipeline is reliable.
+Safe input resolution, native thin/fat Mach-O inspection, normalized Objective-C metadata
+extraction, and patch schema/type validation are implemented. Objective-C source generation is
+the next command-line milestone; the macOS interface remains deferred until the complete CLI
+pipeline is reliable.

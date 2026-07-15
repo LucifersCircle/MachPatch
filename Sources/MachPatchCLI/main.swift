@@ -18,6 +18,8 @@ struct MachPatchCommand {
                                  List normalized Objective-C classes.
           methods <path> <class> [--json]
                                  List methods declared by an Objective-C class.
+          validate-project <project> [--target <path>]
+                                 Validate a patch project, optionally against a target.
 
         OPTIONS:
           --version             Show the MachPatch version.
@@ -67,6 +69,20 @@ struct MachPatchCommand {
                 exit(EX_USAGE)
             }
             methods(path: arguments[1], className: arguments[2])
+        case "validate-project":
+            guard
+                arguments.count == 2
+                    || (arguments.count == 4 && arguments[2] == "--target")
+            else {
+                writeError(
+                    "Usage: machpatch validate-project <project.json> [--target <path>]\n"
+                )
+                exit(EX_USAGE)
+            }
+            validateProject(
+                projectPath: arguments[1],
+                targetPath: arguments.count == 4 ? arguments[3] : nil
+            )
         default:
             writeError("Unknown command or option: \(arguments[0])\n\n\(help)\n")
             exit(EX_USAGE)
@@ -156,6 +172,57 @@ struct MachPatchCommand {
             writeError("error: \(error.localizedDescription)\n")
             exit(EXIT_FAILURE)
         }
+    }
+
+    private static func validateProject(projectPath: String, targetPath: String?) {
+        do {
+            let project = try readProject(at: URL(filePath: projectPath))
+            let report: PatchProjectValidationReport
+            if let targetPath {
+                report = try InputResolver().withResolvedTarget(
+                    at: URL(filePath: targetPath)
+                ) { target in
+                    let sliceIndex = try AnalyzedPatchProjectValidator.selectedSliceIndex(
+                        for: project,
+                        in: target
+                    )
+                    let analysis = try ObjectiveCAnalyzer().analyze(
+                        target,
+                        sliceIndex: sliceIndex
+                    )
+                    return try AnalyzedPatchProjectValidator.validate(
+                        project,
+                        against: analysis
+                    )
+                }
+            } else {
+                let structural = PatchProjectValidator.validate(project)
+                report = PatchProjectValidationReport(
+                    errors: structural.errors,
+                    warnings: structural.warnings + [
+                        PatchProjectValidationIssue(
+                            code: .targetNotAnalyzed,
+                            message:
+                                "No target was supplied; class, selector, slice, and current type encoding were not checked."
+                        )
+                    ]
+                )
+            }
+
+            try writeJSON(report)
+            if !report.isValid { exit(EXIT_FAILURE) }
+        } catch {
+            writeError("error: \(error.localizedDescription)\n")
+            exit(EXIT_FAILURE)
+        }
+    }
+
+    private static func readProject(at url: URL) throws -> PatchProject {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let data =
+            try handle.read(upToCount: PatchProjectCodec.maximumProjectBytes + 1) ?? Data()
+        return try PatchProjectCodec.decode(data)
     }
 }
 

@@ -1,0 +1,34 @@
+{
+  "build" : {
+    "architectureMode" : "automatic",
+    "enableARC" : true,
+    "minimumIOSVersion" : "15.0",
+    "outputName" : "ExamplePatch"
+  },
+  "formatVersion" : 1,
+  "patches" : [
+    {
+      "action" : {
+        "kind" : "returnBoolean",
+        "value" : true
+      },
+      "className" : "ExampleManager",
+      "enabled" : true,
+      "expectedTypeEncoding" : "B@:",
+      "id" : "4F154FAA-1E35-44AA-B014-30EAE65C3F47",
+      "methodKind" : "instance",
+      "selector" : "featureEnabled"
+    }
+  ],
+  "projectName" : "Example Patch",
+  "target" : {
+    "bundleIdentifier" : "com.example.fixture",
+    "executableName" : "Fixture",
+    "executableSHA256" : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "minimumIOSVersion" : "15.0",
+    "selectedSlice" : {
+      "architecture" : "arm64",
+      "cpuSubtype" : 0
+    }
+  }
+}
