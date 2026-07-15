@@ -27,8 +27,8 @@ MachPatchPackager -> MachPatchBuilder + MachPatchVerifier + MachPatchCore
 ```
 
 The CLI currently depends directly on `MachPatchAnalyzer`, `MachPatchBuilder`, `MachPatchCore`,
-and `MachPatchGenerator`. Later verification and packaging commands will add their feature
-modules as those APIs become available.
+`MachPatchGenerator`, and `MachPatchVerifier`. Packaging will add its feature module when that API
+becomes available.
 
 ## Input resolution
 
@@ -155,6 +155,26 @@ Generated products use `@rpath/<outputName>.dylib`. Successful builds persist bu
 optional merge invocation. Failed compilation, validation, or merging removes partial products.
 Existing symbolic-link destinations and directory collisions are refused.
 
+## LiveContainer compatibility verification
+
+`LiveContainerVerifier` consumes the same native `MachOInspector` facts used by the builder. It
+requires device dynamic-library slices, validates CPU subtype/platform/deployment/install-name
+metadata, and cross-checks the native architecture list with the discovered Xcode `lipo`. The
+discovered `nm` is run once per slice architecture so undefined symbols are not silently limited
+to the host-preferred slice.
+
+Dependency policy is applied to directly parsed load commands. Apple system libraries are
+accepted. Relative third-party dependencies are accepted only when the referenced regular file is
+contained beside the export without traversal or symbolic-link components. Jailbreak dependencies
+and unsupported external paths block verification. A bounded native ASCII scan separately catches
+embedded `/var/jb`, rootless bootstrap, Substrate, ElleKit, libhooker, and PreferenceLoader
+references that are not load commands.
+
+The report model is `Codable` and records raw slices, target slices, dependency and symbol
+classifications, tool executions, individual pass/warn/fail checks, and an explicit final result.
+The CLI renders it as text by default or stable JSON with `--json`, and returns nonzero when any
+blocking check fails.
+
 ## Design constraints
 
 - Report unknown architecture and ABI values explicitly; never silently guess.
@@ -169,17 +189,19 @@ Existing symbolic-link destinations and directory collisions are refused.
 
 ## Completed milestones
 
-1. Bootstrap the package, CLI shell, tests, CI, and documentation.
-2. Resolve IPA, `.app`, and direct Mach-O inputs to an executable and hash.
-3. Inspect thin and fat Mach-O slices, platforms, deployment versions, encryption, and linked
+0. Bootstrap the package, CLI shell, tests, CI, and documentation.
+1. Resolve IPA, `.app`, and direct Mach-O inputs to an executable and hash.
+2. Inspect thin and fat Mach-O slices, platforms, deployment versions, encryption, and linked
    libraries.
-4. Extract and normalize Objective-C classes, methods, properties, ivars, protocols, and
+3. Extract and normalize Objective-C classes, methods, properties, ivars, protocols, and
    categories behind a replaceable provider boundary.
-5. Round-trip patch schema version 1, decode Objective-C method signatures, and validate actions
+4. Round-trip patch schema version 1, decode Objective-C method signatures, and validate actions
    structurally or against a current target.
-6. Generate deterministic, snapshot-tested native Objective-C runtime patch source with bounded
+5. Generate deterministic, snapshot-tested native Objective-C runtime patch source with bounded
    late-class retries.
-7. Discover the selected Xcode/iPhoneOS toolchain and build clean ordinary arm64 dylibs with
+6. Discover the selected Xcode/iPhoneOS toolchain and build clean ordinary arm64 dylibs with
    recorded commands and diagnostics.
-8. Resolve automatic/explicit architectures, distinguish legacy and versioned arm64e, probe the
+7. Resolve automatic/explicit architectures, distinguish legacy and versioned arm64e, probe the
    selected toolchain, compare generated CPU metadata, and merge only validated universal slices.
+8. Verify LiveContainer compatibility with native facts, per-slice Apple-tool cross-checks,
+   dependency/symbol/path policy, target comparison, text/JSON reports, and blocking status.

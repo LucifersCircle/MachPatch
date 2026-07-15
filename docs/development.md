@@ -145,3 +145,26 @@ pointer-authentication subtype for arm64e. Universal output is valid only when b
 slices export the same defined symbols and both fat slices agree with them. Legacy unversioned
 arm64e fixtures and simulator targets must produce blocking diagnostics rather than fallback
 output.
+
+## LiveContainer-verifier acceptance checks
+
+```bash
+.build/debug/machpatch verify /path/to/ExamplePatch.dylib \
+  --target /path/to/Target.ipa
+.build/debug/machpatch verify /path/to/ExamplePatch.dylib \
+  --target /path/to/Target.ipa --json
+```
+
+For a successful report, native parsing and `lipo` must agree on every architecture; every slice
+must be an iPhoneOS dynamic library with a supported CPU subtype, deployment target, and exact
+`@rpath/<filename>` identity. `nm` must run separately for every architecture. Directly parsed
+dependencies must be Apple system libraries or safely included in the export, all unresolved
+symbols must be classified, no jailbreak path marker may be embedded, and at least one slice must
+match the current target.
+
+The unit suite uses purpose-built Mach-O headers and scripted tool output to require blocking
+reports for iOS Simulator binaries, mismatched CPU metadata, `/var/jb`, CydiaSubstrate,
+development-machine install names, unexpected unresolved symbols, and native/`lipo` disagreement.
+Run the command against a real Xcode-built thin and universal dylib as the final acceptance check.
+The text report must be readable, the JSON report must include `formatVersion`, checks, raw facts,
+tool executions, and `result`, and a blocking report must exit nonzero.

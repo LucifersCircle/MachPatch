@@ -4,6 +4,7 @@ import MachPatchAnalyzer
 import MachPatchBuilder
 import MachPatchCore
 import MachPatchGenerator
+import MachPatchVerifier
 
 @main
 struct MachPatchCommand {
@@ -28,6 +29,8 @@ struct MachPatchCommand {
           build <project> --output <directory> [--arch <mode>]
                                  Build an iPhoneOS patch dylib; mode is automatic, arm64,
                                  arm64e, or universal.
+          verify <dylib> [--target <path>] [--json]
+                                 Audit LiveContainer compatibility, optionally against a target.
 
         OPTIONS:
           --version             Show the MachPatch version.
@@ -114,6 +117,18 @@ struct MachPatchCommand {
                 projectPath: arguments[1],
                 outputPath: options.outputPath,
                 architectureMode: options.architectureMode
+            )
+        case "verify":
+            guard let options = parseVerifyOptions(arguments) else {
+                writeError(
+                    "Usage: machpatch verify <dylib> [--target <path>] [--json]\n"
+                )
+                exit(EX_USAGE)
+            }
+            verify(
+                dylibPath: arguments[1],
+                targetPath: options.targetPath,
+                json: options.json
             )
         default:
             writeError("Unknown command or option: \(arguments[0])\n\n\(help)\n")
@@ -334,6 +349,60 @@ struct MachPatchCommand {
         guard let outputPath else { return nil }
         return BuildOptions(outputPath: outputPath, architectureMode: architectureMode)
     }
+
+    private static func verify(
+        dylibPath: String,
+        targetPath: String?,
+        json: Bool
+    ) {
+        do {
+            let dylibURL = URL(filePath: dylibPath)
+            let report: DylibVerificationReport
+            if let targetPath {
+                report = try InputResolver().withResolvedTarget(
+                    at: URL(filePath: targetPath)
+                ) { target in
+                    let targetInspection = try MachOInspector().inspect(target)
+                    return try LiveContainerVerifier().verify(
+                        dylibURL: dylibURL,
+                        targetInspection: targetInspection
+                    )
+                }
+            } else {
+                report = try LiveContainerVerifier().verify(dylibURL: dylibURL)
+            }
+
+            if json {
+                try writeJSON(report)
+            } else {
+                print(HumanVerificationReportFormatter.render(report), terminator: "")
+            }
+            if !report.isReadyForLiveContainerTesting { exit(EXIT_FAILURE) }
+        } catch {
+            writeError("error: \(error.localizedDescription)\n")
+            exit(EXIT_FAILURE)
+        }
+    }
+
+    private static func parseVerifyOptions(_ arguments: [String]) -> VerifyOptions? {
+        guard arguments.count >= 2 else { return nil }
+        var targetPath: String?
+        var json = false
+        var index = 2
+        while index < arguments.count {
+            switch arguments[index] {
+            case "--json" where !json:
+                json = true
+                index += 1
+            case "--target" where targetPath == nil && index + 1 < arguments.count:
+                targetPath = arguments[index + 1]
+                index += 2
+            default:
+                return nil
+            }
+        }
+        return VerifyOptions(targetPath: targetPath, json: json)
+    }
 }
 
 private struct ClassListOutput: Encodable {
@@ -406,4 +475,9 @@ private struct ArchitectureCommandOutput: Encodable {
 private struct BuildOptions {
     let outputPath: String
     let architectureMode: PatchArchitectureMode?
+}
+
+private struct VerifyOptions {
+    let targetPath: String?
+    let json: Bool
 }

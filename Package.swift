@@ -21,6 +21,7 @@ let package = Package(
             name: "MachPatchCLI",
             dependencies: [
                 "MachPatchAnalyzer", "MachPatchBuilder", "MachPatchCore", "MachPatchGenerator",
+                "MachPatchVerifier",
             ]
         ),
         .target(name: "MachPatchCore"),
@@ -64,7 +65,7 @@ let package = Package(
         ),
         .testTarget(
             name: "VerifierTests",
-            dependencies: ["MachPatchVerifier"]
+            dependencies: ["MachPatchAnalyzer", "MachPatchCore", "MachPatchVerifier"]
         ),
     ]
 )

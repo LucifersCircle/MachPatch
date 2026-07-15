@@ -169,6 +169,32 @@ and invokes `lipo` only after both pass. Legacy unversioned arm64e and simulator
 with diagnostics. Rebuilding removes stale products first, and failures leave no partial dylib.
 Every compiler and merge process uses argument arrays without a shell.
 
+## Verify LiveContainer compatibility
+
+Audit a built dylib by itself or compare it with the current IPA, app, or executable:
+
+```bash
+.build/debug/machpatch verify "Build Output/ExamplePatch.dylib"
+.build/debug/machpatch verify "Build Output/ExamplePatch.dylib" \
+  --target "/path/to/Target.ipa"
+.build/debug/machpatch verify "Build Output/ExamplePatch.dylib" \
+  --target "/path/to/Target.ipa" --json
+```
+
+Human-readable output is the default. `--json` emits the complete format-versioned report for
+automation and the future GUI. A blocking check returns a nonzero exit status.
+
+The verifier parses every Mach-O slice natively and cross-checks the architecture list with
+`lipo`. It requires an iPhoneOS dynamic library, supported arm64 or versioned arm64e CPU metadata,
+the expected `@rpath/<filename>` identity, and a declared deployment target. It audits native
+load commands, runs `nm` separately for every slice, classifies unresolved symbols, scans embedded
+strings for jailbreak bootstrap paths, and compares architecture/subtype and deployment metadata
+with the supplied target. Simulator output, legacy arm64e, Substrate/ElleKit/libhooker paths,
+unbundled third-party dependencies, development-machine install names, and incompatible targets
+are blocking failures.
+
+See [docs/livecontainer.md](docs/livecontainer.md) for the verification policy and report fields.
+
 ## Development tools
 
 The repository includes configuration for `swift-format` and SwiftLint. When those tools are
@@ -190,5 +216,6 @@ and implementation constraints.
 Safe input resolution, native thin/fat Mach-O inspection, normalized Objective-C metadata
 extraction, patch schema/type validation, native Objective-C source generation, device dylib
 building, architecture resolution, modern arm64e capability probing, and validated universal
-output are implemented. LiveContainer compatibility verification is the next command-line
-milestone. The full SwiftUI interface is Milestone 10, after successful LiveContainer testing.
+output are implemented. LiveContainer compatibility verification now produces human-readable and
+JSON reports with blocking exit status. Real LiveContainer loading is Milestone 9. The full
+SwiftUI interface is Milestone 10, after successful LiveContainer testing.
