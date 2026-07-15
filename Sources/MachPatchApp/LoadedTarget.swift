@@ -7,6 +7,36 @@ struct LoadedTarget: Equatable, Sendable {
     let target: ResolvedTarget
     let inspection: MachOInspection
     let architectureReport: TargetArchitectureReport
+    let analysisState: TargetAnalysisState
+
+    func replacingAnalysisState(_ state: TargetAnalysisState) -> LoadedTarget {
+        LoadedTarget(
+            inputURL: inputURL,
+            target: target,
+            inspection: inspection,
+            architectureReport: architectureReport,
+            analysisState: state
+        )
+    }
+}
+
+enum TargetAnalysisState: Equatable, Sendable {
+    case unavailable(String)
+    case requiresSliceSelection
+    case loading(sliceIndex: Int)
+    case loaded(ObjectiveCAnalysis)
+    case failed(sliceIndex: Int, message: String)
+
+    var sliceIndex: Int? {
+        switch self {
+        case .loading(let sliceIndex), .failed(let sliceIndex, _):
+            sliceIndex
+        case .loaded(let analysis):
+            analysis.sliceIndex
+        case .unavailable, .requiresSliceSelection:
+            nil
+        }
+    }
 }
 
 enum WorkspacePhase: Equatable, Sendable {
@@ -19,4 +49,18 @@ enum WorkspacePhase: Equatable, Sendable {
 struct WorkspaceFailure: Equatable, Sendable {
     let inputURL: URL
     let message: String
+}
+
+enum WorkspaceNavigation: Hashable {
+    case target
+    case objectiveCClass(String)
+}
+
+enum ObjectiveCClassFilter: String, CaseIterable, Identifiable {
+    case all = "All Classes"
+    case likelyAppDefined = "Likely App-Defined"
+    case objectiveCVisibleSwift = "Objective-C Swift"
+    case withProperties = "With Properties"
+
+    var id: Self { self }
 }

@@ -1,9 +1,16 @@
 import Foundation
 import MachPatchAnalyzer
 import MachPatchBuilder
+import MachPatchCore
 
 protocol TargetLoading: Sendable {
     func loadTarget(at inputURL: URL) async throws -> LoadedTarget
+
+    func loadAnalysis(
+        at inputURL: URL,
+        expectedSHA256: String,
+        sliceIndex: Int
+    ) async throws -> ObjectiveCAnalysis
 }
 
 struct TargetLoader: TargetLoading {
@@ -20,13 +27,83 @@ struct TargetLoader: TargetLoading {
             return try InputResolver().withResolvedTarget(at: inputURL) { target in
                 try Task.checkCancellation()
                 let inspection = try MachOInspector().inspect(target)
+                let architectureReport = ArchitectureResolver.report(for: inspection.slices)
                 return LoadedTarget(
                     inputURL: inputURL,
                     target: target,
                     inspection: inspection,
-                    architectureReport: ArchitectureResolver.report(for: inspection.slices)
+                    architectureReport: architectureReport,
+                    analysisState: initialAnalysisState(
+                        target: target,
+                        architectureReport: architectureReport
+                    )
                 )
             }
         }.value
+    }
+
+    func loadAnalysis(
+        at inputURL: URL,
+        expectedSHA256: String,
+        sliceIndex: Int
+    ) async throws -> ObjectiveCAnalysis {
+        try await Task.detached(priority: .userInitiated) {
+            let hasSecurityScope = inputURL.startAccessingSecurityScopedResource()
+            defer {
+                if hasSecurityScope {
+                    inputURL.stopAccessingSecurityScopedResource()
+                }
+            }
+
+            return try InputResolver().withResolvedTarget(at: inputURL) { target in
+                try Task.checkCancellation()
+                guard target.sha256 == expectedSHA256 else {
+                    throw TargetLoadingError.targetChanged
+                }
+                let slices = try MachOInspector().inspect(target).slices
+                let report = ArchitectureResolver.report(for: slices)
+                guard
+                    report.slices.contains(where: {
+                        $0.index == sliceIndex && $0.supportedForPatching
+                    })
+                else {
+                    throw TargetLoadingError.unsupportedSlice(sliceIndex)
+                }
+                return try ObjectiveCAnalyzer().analyze(target, sliceIndex: sliceIndex)
+            }
+        }.value
+    }
+
+    private func initialAnalysisState(
+        target: ResolvedTarget,
+        architectureReport: TargetArchitectureReport
+    ) -> TargetAnalysisState {
+        let supportedSlices = architectureReport.slices.filter(\.supportedForPatching)
+        guard !supportedSlices.isEmpty else {
+            return .unavailable(architectureReport.automaticReason)
+        }
+        guard supportedSlices.count == 1, let slice = supportedSlices.first else {
+            return .requiresSliceSelection
+        }
+
+        do {
+            return .loaded(try ObjectiveCAnalyzer().analyze(target, sliceIndex: slice.index))
+        } catch {
+            return .failed(sliceIndex: slice.index, message: error.localizedDescription)
+        }
+    }
+}
+
+enum TargetLoadingError: Error, Equatable, LocalizedError, Sendable {
+    case targetChanged
+    case unsupportedSlice(Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .targetChanged:
+            "The target changed after it was opened. Open it again before analyzing classes."
+        case .unsupportedSlice(let sliceIndex):
+            "Slice \(sliceIndex) is unavailable or unsupported for patching."
+        }
     }
 }

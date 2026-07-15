@@ -7,11 +7,12 @@ struct MachPatchRootView: View {
     var body: some View {
         NavigationSplitView {
             TargetSidebar(model: model)
-                .navigationSplitViewColumnWidth(min: 230, ideal: 270, max: 340)
+                .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 300)
         } detail: {
             WorkspaceDetail(model: model)
         }
-        .frame(minWidth: 880, minHeight: 580)
+        .navigationSplitViewStyle(.balanced)
+        .frame(minWidth: 900, minHeight: 620)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
@@ -51,16 +52,24 @@ private struct WorkspaceDetail: View {
     @ObservedObject var model: WorkspaceModel
 
     var body: some View {
-        switch model.phase {
-        case .empty:
-            EmptyWorkspaceView(openTarget: model.chooseTarget)
-        case .loading(let inputURL):
-            LoadingTargetView(inputURL: inputURL)
-        case .loaded(let loadedTarget):
-            TargetSummaryView(loadedTarget: loadedTarget)
-        case .failed(let failure):
-            FailedTargetView(failure: failure, openTarget: model.chooseTarget)
+        Group {
+            switch model.phase {
+            case .empty:
+                EmptyWorkspaceView(openTarget: model.chooseTarget)
+            case .loading(let inputURL):
+                LoadingTargetView(inputURL: inputURL)
+            case .loaded(let loadedTarget):
+                if let objectiveCClass = model.selectedClass {
+                    ClassBrowserView(objectiveCClass: objectiveCClass)
+                        .id(objectiveCClass.id)
+                } else {
+                    TargetSummaryView(loadedTarget: loadedTarget)
+                }
+            case .failed(let failure):
+                FailedTargetView(failure: failure, openTarget: model.chooseTarget)
+            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

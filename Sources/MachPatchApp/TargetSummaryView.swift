@@ -1,4 +1,5 @@
 import MachPatchBuilder
+import MachPatchCore
 import SwiftUI
 
 struct TargetSummaryView: View {
@@ -10,6 +11,7 @@ struct TargetSummaryView: View {
                 header
                 targetDetails
                 architectureDetails
+                analysisDetails
             }
             .frame(maxWidth: 940, alignment: .leading)
             .padding(28)
@@ -80,6 +82,61 @@ struct TargetSummaryView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 8)
         }
+    }
+
+    @ViewBuilder
+    private var analysisDetails: some View {
+        GroupBox("Objective-C Analysis") {
+            switch loadedTarget.analysisState {
+            case .loaded(let analysis):
+                let methodCount = analysis.metadata.classes.reduce(into: 0) { count, item in
+                    count += item.instanceMethods.count + item.classMethods.count
+                }
+                VStack(alignment: .leading, spacing: 10) {
+                    Label(
+                        "Loaded \(analysis.metadata.classes.count) classes and \(methodCount) methods",
+                        systemImage: "checkmark.circle.fill"
+                    )
+                    .foregroundStyle(.green)
+                    LabeledContent("Selected slice", value: String(analysis.sliceIndex))
+                    LabeledContent("Architecture", value: analysis.architecture.rawValue)
+                    LabeledContent("Metadata backend", value: analysis.backend.rawValue)
+                    ForEach(analysis.warnings, id: \.self) { warning in
+                        Label(warning, systemImage: "exclamationmark.triangle")
+                            .font(.callout)
+                            .foregroundStyle(.orange)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 8)
+            case .requiresSliceSelection:
+                analysisMessage(
+                    "Choose a supported architecture in the sidebar before browsing classes.",
+                    systemImage: "cursorarrow.click"
+                )
+            case .loading(let sliceIndex):
+                HStack(spacing: 10) {
+                    ProgressView()
+                    Text("Analyzing Objective-C metadata in slice \(sliceIndex)…")
+                }
+                .padding(.vertical, 8)
+            case .failed(_, let message):
+                analysisMessage(message, systemImage: "exclamationmark.triangle.fill", color: .red)
+            case .unavailable(let reason):
+                analysisMessage(reason, systemImage: "nosign", color: .secondary)
+            }
+        }
+    }
+
+    private func analysisMessage(
+        _ message: String,
+        systemImage: String,
+        color: Color = .secondary
+    ) -> some View {
+        Label(message, systemImage: systemImage)
+            .foregroundStyle(color)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 8)
     }
 
     private var displayName: String {
