@@ -455,22 +455,43 @@ public struct LiveContainerVerifier: Sendable {
             dylibSlices: dylibSlices,
             targetSlices: targetInspection.slices
         )
-        let comparisons = matches.compactMap { pair -> (String, String, Bool)? in
-            guard let dylibText = pair.0.minimumOSVersion,
-                let targetText = pair.1.minimumOSVersion,
-                let dylibVersion = NumericVersion(dylibText),
-                let targetVersion = NumericVersion(targetText)
-            else { return nil }
-            return (dylibText, targetText, dylibVersion <= targetVersion)
+        let hostMinimum = targetInspection.target.minimumOSVersion.flatMap { text in
+            NumericVersion(text).map { (text, $0) }
         }
-        if comparisons.contains(where: { $0.2 }) {
+        let comparisons = matches.compactMap { pair -> DeploymentComparison? in
+            guard let dylibText = pair.0.minimumOSVersion,
+                let dylibVersion = NumericVersion(dylibText)
+            else { return nil }
+
+            let imageMinimum = pair.1.minimumOSVersion.flatMap { text in
+                NumericVersion(text).map { (text, $0) }
+            }
+            let effectiveMinimum: (String, NumericVersion)
+            switch (hostMinimum, imageMinimum) {
+            case (.some(let host), .some(let image)):
+                effectiveMinimum = host.1 >= image.1 ? host : image
+            case (.some(let host), .none):
+                effectiveMinimum = host
+            case (.none, .some(let image)):
+                effectiveMinimum = image
+            case (.none, .none):
+                return nil
+            }
+
+            return DeploymentComparison(
+                dylibMinimum: dylibText,
+                imageMinimum: imageMinimum?.0,
+                hostMinimum: hostMinimum?.0,
+                effectiveMinimum: effectiveMinimum.0,
+                isCompatible: dylibVersion <= effectiveMinimum.1
+            )
+        }
+        if comparisons.contains(where: \.isCompatible) {
             return VerificationCheck(
                 code: .deploymentTarget,
                 status: .passed,
                 message: "The dylib deployment target is compatible with a matching target slice.",
-                evidence: comparisons.map {
-                    "dylib iOS \($0.0), target iOS \($0.1)"
-                }
+                evidence: comparisons.map(\.evidence)
             )
         }
         if !comparisons.isEmpty {
@@ -478,9 +499,7 @@ public struct LiveContainerVerifier: Sendable {
                 code: .deploymentTarget,
                 status: .failed,
                 message: "The dylib requires a newer iOS version than the matching target slice.",
-                evidence: comparisons.map {
-                    "dylib iOS \($0.0), target iOS \($0.1)"
-                }
+                evidence: comparisons.map(\.evidence)
             )
         }
         return VerificationCheck(
@@ -489,6 +508,26 @@ public struct LiveContainerVerifier: Sendable {
             message:
                 "Deployment compatibility could not be compared because a matching version value was unavailable."
         )
+    }
+
+    private struct DeploymentComparison {
+        let dylibMinimum: String
+        let imageMinimum: String?
+        let hostMinimum: String?
+        let effectiveMinimum: String
+        let isCompatible: Bool
+
+        var evidence: String {
+            var fields = ["dylib iOS \(dylibMinimum)"]
+            if let imageMinimum {
+                fields.append("target image iOS \(imageMinimum)")
+            }
+            if let hostMinimum {
+                fields.append("host iOS \(hostMinimum)")
+            }
+            fields.append("effective iOS \(effectiveMinimum)")
+            return fields.joined(separator: ", ")
+        }
     }
 
     private func compatiblePairs(

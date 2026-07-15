@@ -160,6 +160,27 @@ final class LiveContainerVerifierTests: XCTestCase {
         )
     }
 
+    func testEmbeddedImageUsesLaterHostDeploymentFloor() throws {
+        let dylib = VerifierMachOFixture.thin64(
+            fileType: 6,
+            minimumVersion: VerifierMachOFixture.packedVersion(15, 0),
+            installName: "@rpath/Fixture.dylib"
+        )
+        let olderFramework = VerifierMachOFixture.thin64(
+            fileType: 6,
+            minimumVersion: VerifierMachOFixture.packedVersion(12, 0)
+        )
+
+        let report = try verify(dylib, target: olderFramework)
+        let compatibilityCheck = report.checks.last { $0.code == .deploymentTarget }
+
+        XCTAssertEqual(compatibilityCheck?.status, .passed)
+        XCTAssertEqual(
+            compatibilityCheck?.evidence,
+            ["dylib iOS 15.0, target image iOS 12.0, host iOS 15.0, effective iOS 15.0"]
+        )
+    }
+
     func testDetectsLipoAndNativeArchitectureDisagreement() throws {
         let report = try verify(
             VerifierMachOFixture.thin64(
