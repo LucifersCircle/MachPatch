@@ -9,6 +9,7 @@ let package = Package(
     ],
     products: [
         .executable(name: "machpatch", targets: ["MachPatchCLI"]),
+        .executable(name: "MachPatchApp", targets: ["MachPatchApp"]),
         .library(name: "MachPatchCore", targets: ["MachPatchCore"]),
         .library(name: "MachPatchAnalyzer", targets: ["MachPatchAnalyzer"]),
         .library(name: "MachPatchGenerator", targets: ["MachPatchGenerator"]),
@@ -17,6 +18,10 @@ let package = Package(
         .library(name: "MachPatchPackager", targets: ["MachPatchPackager"]),
     ],
     targets: [
+        .executableTarget(
+            name: "MachPatchApp",
+            dependencies: ["MachPatchAnalyzer", "MachPatchBuilder", "MachPatchCore"]
+        ),
         .executableTarget(
             name: "MachPatchCLI",
             dependencies: [
@@ -66,6 +71,10 @@ let package = Package(
         .testTarget(
             name: "VerifierTests",
             dependencies: ["MachPatchAnalyzer", "MachPatchCore", "MachPatchVerifier"]
+        ),
+        .testTarget(
+            name: "AppTests",
+            dependencies: ["MachPatchApp", "MachPatchBuilder", "MachPatchCore"]
         ),
     ]
 )
