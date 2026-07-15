@@ -12,21 +12,88 @@ struct MethodRevealRequest: Equatable, Identifiable {
     let methodID: String
 }
 
+enum PendingWorkspaceTransition: Equatable {
+    case startNewPatch
+    case openTarget(URL)
+    case openProject(URL)
+    case selectArchitecture(Int)
+    case selectImage(String)
+
+    var confirmationMessage: String {
+        switch self {
+        case .startNewPatch:
+            "Starting a new patch will reset the current project and remove its method patches."
+        case .openTarget(let url):
+            "Opening \(url.lastPathComponent) will replace the current target and patch project."
+        case .openProject(let url):
+            "Loading \(url.deletingPathExtension().lastPathComponent) will replace the current patch project."
+        case .selectArchitecture:
+            "Selecting another architecture will replace the current patch project."
+        case .selectImage:
+            "Selecting another target image will replace the current patch project."
+        }
+    }
+
+    var continueActionTitle: String {
+        switch self {
+        case .startNewPatch:
+            "Start New Patch"
+        case .openTarget:
+            "Open Target"
+        case .openProject:
+            "Load Patch"
+        case .selectArchitecture:
+            "Switch Architecture"
+        case .selectImage:
+            "Switch Image"
+        }
+    }
+}
+
+private struct TargetAnalysisCacheKey: Hashable {
+    let hostSHA256: String
+    let imageID: String
+    let imageSHA256: String
+    let sliceIndex: Int
+}
+
+enum WorkspaceExportKind: String, Equatable {
+    case patchProject = "Patch Project"
+    case dylib = "Dylib"
+    case sourceBundle = "Source Bundle"
+    case debianPackage = "Debian Package"
+}
+
+struct CompletedWorkspaceExport: Equatable, Identifiable {
+    let kind: WorkspaceExportKind
+    let url: URL
+
+    var id: String { "\(kind.rawValue):\(url.path)" }
+    var shareLabel: String { "Share \(url.lastPathComponent)…" }
+}
+
 @MainActor
 final class WorkspaceModel: ObservableObject {
-    @Published private(set) var phase: WorkspacePhase = .empty
+    @Published private(set) var phase: WorkspacePhase = .empty {
+        didSet { refreshClassBrowserIndex() }
+    }
     @Published var isImporterPresented = false
     @Published private(set) var isDropTargeted = false
     @Published var navigation: WorkspaceNavigation? = .target
     @Published var selectedMethodID: String?
     @Published private(set) var methodRevealRequest: MethodRevealRequest?
-    @Published var classSearch = ""
-    @Published var classFilter: ObjectiveCClassFilter = .all
+    @Published var classSearch = "" {
+        didSet { refreshClassBrowserResults() }
+    }
+    @Published var classFilter: ObjectiveCClassFilter = .all {
+        didSet { refreshClassBrowserResults() }
+    }
+    @Published private(set) var filteredClasses: [ObjectiveCClassBrowserTarget] = []
     @Published private(set) var projectDraft: PatchProjectDraft?
     @Published private(set) var savedPatchProjects: [SavedPatchProject] = []
     @Published var pendingSavedPatchDeletion: SavedPatchProject?
     @Published var pendingPatchDeletion: MethodPatch?
-    @Published var isNewPatchConfirmationPresented = false
+    @Published private(set) var pendingWorkspaceTransition: PendingWorkspaceTransition?
     @Published var isProjectImporterPresented = false
     @Published var isProjectExporterPresented = false
     @Published var isDylibExporterPresented = false
@@ -35,6 +102,7 @@ final class WorkspaceModel: ObservableObject {
     @Published private(set) var sourceBundleExportDocument: SourceBundleExportDocument?
     @Published var isDebianPackageExporterPresented = false
     @Published private(set) var debianPackageExportDocument: DebianPackageExportDocument?
+    @Published private(set) var lastCompletedExport: CompletedWorkspaceExport?
     @Published var workspaceAlert: WorkspaceAlert?
     @Published var pendingProjectImport: PendingProjectImport?
     @Published private(set) var generatedSourcePreview: GeneratedSourcePreviewState =
@@ -53,6 +121,12 @@ final class WorkspaceModel: ObservableObject {
     private var buildTask: Task<Void, Never>?
     private var buildID: UUID?
     private var savedProjectBaseline: PatchProject?
+    private var analysisCache: [TargetAnalysisCacheKey: LoadedObjectiveCAnalysis] = [:]
+    private var analysisCacheRecency: [TargetAnalysisCacheKey] = []
+    private var classBrowserTargetsByID: [String: ObjectiveCClassBrowserTarget] = [:]
+    private var classBrowserTargetsByName: [String: ObjectiveCClassBrowserTarget] = [:]
+    private var methodSearchMatchesByClassID: [String: [ObjectiveCCanonicalMethod]] = [:]
+    private var isClassBrowserRefreshSuspended = false
 
     init(
         loader: any TargetLoading = TargetLoader(),
@@ -80,15 +154,20 @@ final class WorkspaceModel: ObservableObject {
     }
 
     func openTarget(at inputURL: URL) {
+        requestWorkspaceTransition(.openTarget(inputURL))
+    }
+
+    private func beginOpeningTarget(at inputURL: URL) {
         loadTask?.cancel()
         analysisTask?.cancel()
         projectTask?.cancel()
+        analysisCache = [:]
+        analysisCacheRecency = []
         resetBuildState(removingArtifact: true)
         navigation = .target
         selectedMethodID = nil
         methodRevealRequest = nil
-        classSearch = ""
-        classFilter = .all
+        resetClassBrowserQuery()
         savedProjectBaseline = nil
         replaceProjectDraft(nil)
         phase = .loading(inputURL)
@@ -98,6 +177,7 @@ final class WorkspaceModel: ObservableObject {
             do {
                 let loadedTarget = try await loader.loadTarget(at: inputURL)
                 try Task.checkCancellation()
+                self?.cacheLoadedAnalysis(in: loadedTarget)
                 self?.phase = .loaded(loadedTarget)
                 self?.replaceProjectDraft(
                     PatchProjectDraft(loadedTarget: loadedTarget),
@@ -132,6 +212,41 @@ final class WorkspaceModel: ObservableObject {
             return
         }
 
+        requestWorkspaceTransition(.selectArchitecture(sliceIndex))
+    }
+
+    private func beginSelectingArchitecture(sliceIndex: Int) {
+        guard case .loaded(let loadedTarget) = phase else { return }
+        guard
+            loadedTarget.architectureReport.slices.contains(where: {
+                $0.index == sliceIndex && $0.supportedForPatching
+            })
+        else { return }
+
+        if case .loaded(let analysis) = loadedTarget.analysisState,
+            analysis.sliceIndex == sliceIndex
+        {
+            navigation = .target
+            return
+        }
+
+        let cacheKey = analysisCacheKey(for: loadedTarget, sliceIndex: sliceIndex)
+        if let cachedAnalysis = cachedAnalysis(for: cacheKey) {
+            resetBuildState(removingArtifact: true)
+            navigation = .target
+            let analyzedTarget = loadedTarget.replacingAnalysisState(
+                .loaded(cachedAnalysis.analysis),
+                patchabilityReport: cachedAnalysis.patchabilityReport,
+                classBrowserTargets: cachedAnalysis.classBrowserTargets
+            )
+            phase = .loaded(analyzedTarget)
+            replaceProjectDraft(
+                PatchProjectDraft(loadedTarget: analyzedTarget),
+                marksClean: true
+            )
+            return
+        }
+
         resetBuildState(removingArtifact: true)
         analysisTask?.cancel()
         navigation = .target
@@ -159,6 +274,7 @@ final class WorkspaceModel: ObservableObject {
                     currentTarget.inspection.image.id == loadedTarget.inspection.image.id
                 else { return }
                 let analysis = loadedAnalysis.analysis
+                self?.storeCachedAnalysis(loadedAnalysis, for: cacheKey)
                 let analyzedTarget = currentTarget.replacingAnalysisState(
                     .loaded(analysis),
                     patchabilityReport: loadedAnalysis.patchabilityReport,
@@ -194,12 +310,30 @@ final class WorkspaceModel: ObservableObject {
             navigation = .target
             return
         }
-        guard projectDraft?.patches.isEmpty != false else {
+        guard let image = loadedTarget.images.first(where: { $0.id == imageID }) else {
             workspaceAlert = WorkspaceAlert(
-                title: "Patch Project Is In Use",
-                message:
-                    "Save or export the current patch project, then start a new patch before selecting another image."
+                title: "Image Unavailable",
+                message: "The selected image is no longer part of this target."
             )
+            return
+        }
+        guard case .available = image.inspectionState else {
+            if case .failed(let message) = image.inspectionState {
+                workspaceAlert = WorkspaceAlert(
+                    title: "Image Inspection Failed",
+                    message: message
+                )
+            }
+            return
+        }
+
+        requestWorkspaceTransition(.selectImage(imageID))
+    }
+
+    private func beginSelectingImage(id imageID: String) {
+        guard case .loaded(let loadedTarget) = phase else { return }
+        guard loadedTarget.inspection.image.id != imageID else {
+            navigation = .target
             return
         }
         guard let image = loadedTarget.images.first(where: { $0.id == imageID }) else {
@@ -224,8 +358,7 @@ final class WorkspaceModel: ObservableObject {
         navigation = .target
         selectedMethodID = nil
         methodRevealRequest = nil
-        classSearch = ""
-        classFilter = .all
+        resetClassBrowserQuery()
         savedProjectBaseline = nil
         replaceProjectDraft(nil)
 
@@ -247,7 +380,7 @@ final class WorkspaceModel: ObservableObject {
         phase = .loaded(selectedTarget)
 
         if supportedSlices.count == 1, let slice = supportedSlices.first {
-            selectArchitecture(sliceIndex: slice.index)
+            beginSelectingArchitecture(sliceIndex: slice.index)
         }
     }
 
@@ -258,18 +391,9 @@ final class WorkspaceModel: ObservableObject {
         return analysis
     }
 
-    var filteredClasses: [ObjectiveCClassBrowserTarget] {
-        guard case .loaded(let loadedTarget) = phase else { return [] }
-        let query = classSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        return loadedTarget.classBrowserTargets.filter { target in
-            matchesFilter(target) && matchesQuery(target, query: query)
-        }
-    }
-
     var selectedClass: ObjectiveCClassBrowserTarget? {
         guard case .objectiveCClass(let classID) = navigation else { return nil }
-        guard case .loaded(let loadedTarget) = phase else { return nil }
-        return loadedTarget.classBrowserTargets.first { $0.id == classID }
+        return classBrowserTargetsByID[classID]
     }
 
     var targetIconData: Data? {
@@ -280,16 +404,7 @@ final class WorkspaceModel: ObservableObject {
     func methodSearchMatches(
         for objectiveCClass: ObjectiveCClassBrowserTarget
     ) -> [ObjectiveCCanonicalMethod] {
-        let query = classSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty, !matchesClassMetadata(objectiveCClass, query: query) else {
-            return []
-        }
-        return objectiveCClass.methods.filter {
-            $0.selector.localizedCaseInsensitiveContains(query)
-                || $0.categoryNames.contains(where: {
-                    $0.localizedCaseInsensitiveContains(query)
-                })
-        }
+        methodSearchMatchesByClassID[objectiveCClass.id] ?? []
     }
 
     var patchProject: PatchProject? {
@@ -299,6 +414,10 @@ final class WorkspaceModel: ObservableObject {
     var hasUnsavedPatchChanges: Bool {
         guard let patchProject else { return false }
         return patchProject != savedProjectBaseline
+    }
+
+    var pendingWorkspaceTransitionHasUnsavedChanges: Bool {
+        pendingWorkspaceTransition != nil && hasUnsavedPatchChanges
     }
 
     var canStartNewPatch: Bool {
@@ -416,7 +535,7 @@ final class WorkspaceModel: ObservableObject {
     }
 
     @discardableResult
-    func savePatch() -> Bool {
+    func savePatch(showSuccessAlert: Bool = true) -> Bool {
         guard let projectDraft else {
             workspaceAlert = WorkspaceAlert(
                 title: "No Patch Project",
@@ -437,11 +556,13 @@ final class WorkspaceModel: ObservableObject {
             let savedProject = try projectLibrary.save(projectDraft.project)
             savedProjectBaseline = projectDraft.project
             refreshSavedPatchProjects(reportErrors: false)
-            workspaceAlert = WorkspaceAlert(
-                title: "Patch Saved",
-                message:
-                    "Saved \(savedProject.projectName) to MachPatch’s private patch library."
-            )
+            if showSuccessAlert {
+                workspaceAlert = WorkspaceAlert(
+                    title: "Patch Saved",
+                    message:
+                        "Saved \(savedProject.projectName) to MachPatch’s private patch library."
+                )
+            }
             return true
         } catch {
             workspaceAlert = WorkspaceAlert(
@@ -461,26 +582,27 @@ final class WorkspaceModel: ObservableObject {
             )
             return
         }
-        if hasUnsavedPatchChanges {
-            isNewPatchConfirmationPresented = true
-        } else {
-            startNewPatch()
+        requestWorkspaceTransition(.startNewPatch)
+    }
+
+    func saveAndPerformPendingWorkspaceTransition() {
+        guard let transition = pendingWorkspaceTransition else { return }
+        pendingWorkspaceTransition = nil
+        guard savePatch(showSuccessAlert: false) else {
+            pendingWorkspaceTransition = transition
+            return
         }
+        performWorkspaceTransition(transition)
     }
 
-    func saveAndStartNewPatch() {
-        isNewPatchConfirmationPresented = false
-        guard savePatch() else { return }
-        startNewPatch()
+    func discardAndPerformPendingWorkspaceTransition() {
+        guard let transition = pendingWorkspaceTransition else { return }
+        pendingWorkspaceTransition = nil
+        performWorkspaceTransition(transition)
     }
 
-    func discardAndStartNewPatch() {
-        isNewPatchConfirmationPresented = false
-        startNewPatch()
-    }
-
-    func cancelNewPatch() {
-        isNewPatchConfirmationPresented = false
+    func cancelPendingWorkspaceTransition() {
+        pendingWorkspaceTransition = nil
     }
 
     func loadPatch(_ savedProject: SavedPatchProject) {
@@ -521,8 +643,9 @@ final class WorkspaceModel: ObservableObject {
 
     func handleProjectExport(_ result: Result<URL, any Error>) {
         switch result {
-        case .success:
+        case .success(let url):
             savedProjectBaseline = patchProject
+            lastCompletedExport = CompletedWorkspaceExport(kind: .patchProject, url: url)
         case .failure(let error):
             workspaceAlert = WorkspaceAlert(
                 title: "Couldn’t Export Patch",
@@ -564,6 +687,7 @@ final class WorkspaceModel: ObservableObject {
     func handleDylibExport(_ result: Result<URL, any Error>) {
         switch result {
         case .success(let url):
+            lastCompletedExport = CompletedWorkspaceExport(kind: .dylib, url: url)
             workspaceAlert = WorkspaceAlert(
                 title: "Dylib Exported",
                 message:
@@ -608,6 +732,7 @@ final class WorkspaceModel: ObservableObject {
     func handleSourceBundleExport(_ result: Result<URL, any Error>) {
         handleOptionalExport(
             result,
+            kind: .sourceBundle,
             successTitle: "Source Bundle Exported",
             failureTitle: "Couldn’t Export Source Bundle"
         )
@@ -646,6 +771,7 @@ final class WorkspaceModel: ObservableObject {
     func handleDebianPackageExport(_ result: Result<URL, any Error>) {
         handleOptionalExport(
             result,
+            kind: .debianPackage,
             successTitle: "Debian Package Exported",
             failureTitle: "Couldn’t Export Debian Package"
         )
@@ -654,11 +780,13 @@ final class WorkspaceModel: ObservableObject {
 
     private func handleOptionalExport(
         _ result: Result<URL, any Error>,
+        kind: WorkspaceExportKind,
         successTitle: String,
         failureTitle: String
     ) {
         switch result {
         case .success(let url):
+            lastCompletedExport = CompletedWorkspaceExport(kind: kind, url: url)
             workspaceAlert = WorkspaceAlert(
                 title: successTitle,
                 message:
@@ -673,6 +801,10 @@ final class WorkspaceModel: ObservableObject {
     }
 
     func openProject(at projectURL: URL) {
+        requestWorkspaceTransition(.openProject(projectURL))
+    }
+
+    private func beginOpeningProject(at projectURL: URL) {
         guard case .loaded(let loadedTarget) = phase,
             case .loaded(let analysis) = loadedTarget.analysisState,
             let selectedSlice = loadedTarget.inspection.slices.first(where: {
@@ -742,10 +874,8 @@ final class WorkspaceModel: ObservableObject {
 
     func inspectPatch(_ patch: MethodPatch) {
         guard
-            case .loaded(let loadedTarget) = phase,
-            let objectiveCClass = loadedTarget.classBrowserTargets.first(where: {
-                $0.name == patch.className
-            })
+            case .loaded = phase,
+            let objectiveCClass = classBrowserTargetsByName[patch.className]
         else {
             workspaceAlert = WorkspaceAlert(
                 title: "Patch Target Unavailable",
@@ -951,6 +1081,131 @@ final class WorkspaceModel: ObservableObject {
         }
     }
 
+    private func refreshClassBrowserIndex() {
+        guard case .loaded(let loadedTarget) = phase else {
+            classBrowserTargetsByID = [:]
+            classBrowserTargetsByName = [:]
+            filteredClasses = []
+            methodSearchMatchesByClassID = [:]
+            return
+        }
+
+        classBrowserTargetsByID = loadedTarget.classBrowserTargets.reduce(into: [:]) {
+            $0[$1.id] = $1
+        }
+        classBrowserTargetsByName = loadedTarget.classBrowserTargets.reduce(into: [:]) {
+            $0[$1.name] = $1
+        }
+        refreshClassBrowserResults()
+    }
+
+    private func refreshClassBrowserResults() {
+        guard !isClassBrowserRefreshSuspended else { return }
+        guard case .loaded(let loadedTarget) = phase else {
+            filteredClasses = []
+            methodSearchMatchesByClassID = [:]
+            return
+        }
+
+        let query = classSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        var results: [ObjectiveCClassBrowserTarget] = []
+        results.reserveCapacity(loadedTarget.classBrowserTargets.count)
+        var methodMatches: [String: [ObjectiveCCanonicalMethod]] = [:]
+
+        for target in loadedTarget.classBrowserTargets where matchesFilter(target) {
+            guard !query.isEmpty else {
+                results.append(target)
+                continue
+            }
+
+            if matchesClassMetadata(target, query: query) {
+                results.append(target)
+                continue
+            }
+
+            let matchingMethods = target.methods.filter { method in
+                method.selector.localizedCaseInsensitiveContains(query)
+                    || method.categoryNames.contains(where: {
+                        $0.localizedCaseInsensitiveContains(query)
+                    })
+            }
+            if !matchingMethods.isEmpty {
+                results.append(target)
+                methodMatches[target.id] = matchingMethods
+                continue
+            }
+
+            if target.categoryNames.contains(where: {
+                $0.localizedCaseInsensitiveContains(query)
+            }) {
+                results.append(target)
+            }
+        }
+
+        filteredClasses = results
+        methodSearchMatchesByClassID = methodMatches
+    }
+
+    private func resetClassBrowserQuery() {
+        isClassBrowserRefreshSuspended = true
+        classSearch = ""
+        classFilter = .all
+        isClassBrowserRefreshSuspended = false
+    }
+
+    private func analysisCacheKey(
+        for loadedTarget: LoadedTarget,
+        sliceIndex: Int
+    ) -> TargetAnalysisCacheKey {
+        TargetAnalysisCacheKey(
+            hostSHA256: loadedTarget.target.sha256,
+            imageID: loadedTarget.inspection.image.id,
+            imageSHA256: loadedTarget.inspection.image.sha256,
+            sliceIndex: sliceIndex
+        )
+    }
+
+    private func cacheLoadedAnalysis(in loadedTarget: LoadedTarget) {
+        guard case .loaded(let analysis) = loadedTarget.analysisState else { return }
+        let report =
+            loadedTarget.patchabilityReport
+            ?? ObjectiveCPatchabilityAnalyzer.report(for: analysis.metadata)
+        let targets =
+            loadedTarget.classBrowserTargets.isEmpty
+            ? ObjectiveCClassBrowserCatalog.targets(for: analysis)
+            : loadedTarget.classBrowserTargets
+        storeCachedAnalysis(
+            LoadedObjectiveCAnalysis(
+                analysis: analysis,
+                patchabilityReport: report,
+                classBrowserTargets: targets
+            ),
+            for: analysisCacheKey(for: loadedTarget, sliceIndex: analysis.sliceIndex)
+        )
+    }
+
+    private func cachedAnalysis(
+        for key: TargetAnalysisCacheKey
+    ) -> LoadedObjectiveCAnalysis? {
+        guard let analysis = analysisCache[key] else { return nil }
+        analysisCacheRecency.removeAll { $0 == key }
+        analysisCacheRecency.append(key)
+        return analysis
+    }
+
+    private func storeCachedAnalysis(
+        _ analysis: LoadedObjectiveCAnalysis,
+        for key: TargetAnalysisCacheKey
+    ) {
+        analysisCache[key] = analysis
+        analysisCacheRecency.removeAll { $0 == key }
+        analysisCacheRecency.append(key)
+        while analysisCacheRecency.count > 8 {
+            let evictedKey = analysisCacheRecency.removeFirst()
+            analysisCache[evictedKey] = nil
+        }
+    }
+
     private func loadProject(
         _ project: PatchProject,
         targetOverride: PatchTargetIdentity? = nil
@@ -970,6 +1225,30 @@ final class WorkspaceModel: ObservableObject {
         pendingProjectImport = nil
         resetBuildState(removingArtifact: true)
         replaceProjectDraft(draft, marksClean: true)
+    }
+
+    private func requestWorkspaceTransition(_ transition: PendingWorkspaceTransition) {
+        guard pendingWorkspaceTransition == nil else { return }
+        if hasUnsavedPatchChanges || projectDraft?.patches.isEmpty == false {
+            pendingWorkspaceTransition = transition
+        } else {
+            performWorkspaceTransition(transition)
+        }
+    }
+
+    private func performWorkspaceTransition(_ transition: PendingWorkspaceTransition) {
+        switch transition {
+        case .startNewPatch:
+            startNewPatch()
+        case .openTarget(let url):
+            beginOpeningTarget(at: url)
+        case .openProject(let url):
+            beginOpeningProject(at: url)
+        case .selectArchitecture(let sliceIndex):
+            beginSelectingArchitecture(sliceIndex: sliceIndex)
+        case .selectImage(let imageID):
+            beginSelectingImage(id: imageID)
+        }
     }
 
     private func refreshSavedPatchProjects(reportErrors: Bool) {
@@ -996,22 +1275,6 @@ final class WorkspaceModel: ObservableObject {
             }
             return try PatchProjectCodec.decode(Data(contentsOf: projectURL))
         }.value
-    }
-
-    private func matchesQuery(
-        _ objectiveCClass: ObjectiveCClassBrowserTarget,
-        query: String
-    ) -> Bool {
-        guard !query.isEmpty else { return true }
-        if matchesClassMetadata(objectiveCClass, query: query) {
-            return true
-        }
-        if objectiveCClass.categoryNames.contains(where: {
-            $0.localizedCaseInsensitiveContains(query)
-        }) {
-            return true
-        }
-        return !methodSearchMatches(for: objectiveCClass).isEmpty
     }
 
     private func matchesClassMetadata(

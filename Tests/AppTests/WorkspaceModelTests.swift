@@ -104,6 +104,46 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertEqual(model.patchProject?.build.outputName, "FixtureKitPatch")
     }
 
+    func testRevisitingAnalyzedImagesUsesTheInMemoryAnalysisCache() async throws {
+        let target = makeLoadedTargetWithFramework()
+        let hostAnalysis = makeAnalysis(for: target)
+        let loadedTarget = target.replacingAnalysisState(.loaded(hostAnalysis))
+        let hostImage = loadedTarget.inspection.image
+        let frameworkImage = try XCTUnwrap(
+            loadedTarget.images.first(where: { $0.image.kind == .dynamicFramework })?.image
+        )
+        let frameworkAnalysis = ObjectiveCAnalysis(
+            target: loadedTarget.target,
+            image: frameworkImage,
+            sliceIndex: 0,
+            architecture: hostAnalysis.architecture,
+            backend: hostAnalysis.backend,
+            warnings: [],
+            metadata: hostAnalysis.metadata
+        )
+        let loader = CountingLoader(target: loadedTarget, analysis: frameworkAnalysis)
+        let model = WorkspaceModel(loader: loader)
+
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+        model.selectImage(id: frameworkImage.id)
+        await waitForAnalysisToFinish(model)
+        var analysisLoadCount = await loader.analysisLoadCount
+        XCTAssertEqual(analysisLoadCount, 1)
+
+        model.selectImage(id: hostImage.id)
+        await waitForAnalysisToFinish(model)
+        XCTAssertEqual(model.analysis?.image, hostImage)
+        analysisLoadCount = await loader.analysisLoadCount
+        XCTAssertEqual(analysisLoadCount, 1)
+
+        model.selectImage(id: frameworkImage.id)
+        await waitForAnalysisToFinish(model)
+        XCTAssertEqual(model.analysis?.image, frameworkImage)
+        analysisLoadCount = await loader.analysisLoadCount
+        XCTAssertEqual(analysisLoadCount, 1)
+    }
+
     func testEmbeddedImageArchitectureDoesNotReuseSupportedHostArchitecture() async throws {
         let loadedTarget = makeLoadedTargetWithFramework(frameworkPlatform: .iPhoneSimulator)
         let frameworkImage = try XCTUnwrap(
@@ -159,6 +199,73 @@ final class WorkspaceModelTests: XCTestCase {
 
         model.navigation = .objectiveCClass("class-sdk")
         XCTAssertEqual(model.selectedClass?.name, "SDKClass")
+    }
+
+    func testLargeClassSearchIsIndexedAndReusable() async throws {
+        let target = makeLoadedTarget()
+        let analysis = makeAnalysis(for: target)
+        let classTargets = (0..<3_461).map { classIndex in
+            let className = "StressClass\(classIndex)"
+            let methods = (0..<13).map { methodIndex in
+                ObjectiveCCanonicalMethod(
+                    id: "stress-\(classIndex)-\(methodIndex)",
+                    className: className,
+                    selector:
+                        classIndex == 2_000 && methodIndex == 7
+                        ? "needleSelector" : "method\(methodIndex)",
+                    kind: .instance,
+                    typeEncoding: "v16@0:8",
+                    implementationAddress: nil,
+                    declarations: [],
+                    conflictingTypeEncodings: []
+                )
+            }
+            return ObjectiveCClassBrowserTarget(
+                id: "stress-class-\(classIndex)",
+                name: className,
+                superclassName: "NSObject",
+                imageName: "StressFixture",
+                isLikelyAppDefined: true,
+                isObjectiveCVisibleSwift: false,
+                isCategoryOnly: false,
+                methods: methods,
+                properties: [],
+                ivars: [],
+                protocols: [],
+                categoryNames: []
+            )
+        }
+        let loadedTarget = LoadedTarget(
+            inputURL: target.inputURL,
+            target: target.target,
+            inspection: target.inspection,
+            architectureReport: target.architectureReport,
+            images: target.images,
+            iconData: target.iconData,
+            analysisState: .loaded(analysis),
+            patchabilityReport: nil,
+            classBrowserTargets: classTargets
+        )
+        let model = WorkspaceModel(loader: SuccessfulLoader(target: loadedTarget))
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+
+        model.classSearch = "needleSelector"
+
+        let matchedClass = try XCTUnwrap(model.filteredClasses.first)
+        XCTAssertEqual(model.filteredClasses.count, 1)
+        XCTAssertEqual(matchedClass.name, "StressClass2000")
+        XCTAssertEqual(
+            model.methodSearchMatches(for: matchedClass).map(\.selector),
+            ["needleSelector"]
+        )
+
+        var cachedResultChecksum = 0
+        for _ in 0..<100 {
+            cachedResultChecksum += model.filteredClasses.count
+            cachedResultChecksum += model.methodSearchMatches(for: matchedClass).count
+        }
+        XCTAssertEqual(cachedResultChecksum, 200)
     }
 
     func testInspectPatchNavigatesToItsClassAndMethod() async throws {
@@ -445,6 +552,12 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertTrue(model.isDylibExporterPresented)
         XCTAssertNotNil(model.dylibExportDocument)
         XCTAssertEqual(model.defaultDylibFilename, "FixturePatch.dylib")
+        let dylibExportURL = URL(filePath: "/tmp/FixturePatch.dylib")
+        model.handleDylibExport(.success(dylibExportURL))
+        XCTAssertEqual(
+            model.lastCompletedExport,
+            CompletedWorkspaceExport(kind: .dylib, url: dylibExportURL)
+        )
 
         model.updateOutputName("ChangedPatch")
 
@@ -591,11 +704,23 @@ final class WorkspaceModelTests: XCTestCase {
 
         XCTAssertTrue(model.isSourceBundleExporterPresented)
         XCTAssertNotNil(model.sourceBundleExportDocument)
+        let sourceExportURL = URL(filePath: "/tmp/FixturePatchSource.zip")
+        model.handleSourceBundleExport(.success(sourceExportURL))
+        XCTAssertEqual(
+            model.lastCompletedExport,
+            CompletedWorkspaceExport(kind: .sourceBundle, url: sourceExportURL)
+        )
 
         model.exportDebianPackage()
 
         XCTAssertTrue(model.isDebianPackageExporterPresented)
         XCTAssertNotNil(model.debianPackageExportDocument)
+        let debianExportURL = URL(filePath: "/tmp/FixturePatch.deb")
+        model.handleDebianPackageExport(.success(debianExportURL))
+        XCTAssertEqual(
+            model.lastCompletedExport,
+            CompletedWorkspaceExport(kind: .debianPackage, url: debianExportURL)
+        )
 
         model.updateProjectName("Changed Project")
 
@@ -786,6 +911,11 @@ final class WorkspaceModelTests: XCTestCase {
         model.workspaceAlert = nil
 
         model.loadPatch(savedEntry)
+        XCTAssertEqual(
+            model.pendingWorkspaceTransition,
+            .openProject(savedEntry.fileURL)
+        )
+        model.discardAndPerformPendingWorkspaceTransition()
         await waitForProjectImport(model)
 
         XCTAssertEqual(model.patchProject, savedProject)
@@ -843,16 +973,16 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertTrue(model.hasUnsavedPatchChanges)
 
         model.requestNewPatch()
-        XCTAssertTrue(model.isNewPatchConfirmationPresented)
+        XCTAssertEqual(model.pendingWorkspaceTransition, .startNewPatch)
         XCTAssertEqual(model.projectDraft?.patches.count, 1)
 
-        model.cancelNewPatch()
-        XCTAssertFalse(model.isNewPatchConfirmationPresented)
+        model.cancelPendingWorkspaceTransition()
+        XCTAssertNil(model.pendingWorkspaceTransition)
         XCTAssertEqual(model.projectDraft?.patches.count, 1)
 
         model.requestNewPatch()
-        model.discardAndStartNewPatch()
-        XCTAssertFalse(model.isNewPatchConfirmationPresented)
+        model.discardAndPerformPendingWorkspaceTransition()
+        XCTAssertNil(model.pendingWorkspaceTransition)
         XCTAssertTrue(try XCTUnwrap(model.projectDraft?.patches).isEmpty)
         XCTAssertFalse(model.hasUnsavedPatchChanges)
     }
@@ -877,13 +1007,123 @@ final class WorkspaceModelTests: XCTestCase {
         try model.addPatch(className: "AppController", method: method)
 
         model.requestNewPatch()
-        model.saveAndStartNewPatch()
+        model.saveAndPerformPendingWorkspaceTransition()
 
-        XCTAssertFalse(model.isNewPatchConfirmationPresented)
+        XCTAssertNil(model.pendingWorkspaceTransition)
         XCTAssertTrue(try XCTUnwrap(model.projectDraft?.patches).isEmpty)
         XCTAssertFalse(model.hasUnsavedPatchChanges)
         let savedProject = try XCTUnwrap(library.savedProjects().first)
         XCTAssertEqual(savedProject.patchCount, 1)
+    }
+
+    func testOpeningTargetCanCancelOrDiscardUnsavedProject() async throws {
+        let target = makeLoadedTarget()
+        let analysis = makeAnalysis(for: target)
+        let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
+        let model = WorkspaceModel(loader: SuccessfulLoader(target: loadedTarget))
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+        let method = try XCTUnwrap(analysis.metadata.classes.first?.instanceMethods.first)
+        try model.addPatch(className: "AppController", method: method)
+        let replacementURL = URL(filePath: "/tmp/Replacement.ipa")
+
+        model.openTarget(at: replacementURL)
+
+        XCTAssertEqual(model.pendingWorkspaceTransition, .openTarget(replacementURL))
+        XCTAssertEqual(model.projectDraft?.patches.count, 1)
+        model.cancelPendingWorkspaceTransition()
+        XCTAssertNil(model.pendingWorkspaceTransition)
+        XCTAssertEqual(model.projectDraft?.patches.count, 1)
+
+        model.openTarget(at: replacementURL)
+        model.discardAndPerformPendingWorkspaceTransition()
+        await waitForLoadToFinish(model)
+
+        XCTAssertNil(model.pendingWorkspaceTransition)
+        XCTAssertTrue(try XCTUnwrap(model.projectDraft?.patches).isEmpty)
+        XCTAssertFalse(model.hasUnsavedPatchChanges)
+    }
+
+    func testLoadingProjectCanSaveCurrentChangesBeforeReplacingThem() async throws {
+        let libraryURL = FileManager.default.temporaryDirectory.appending(
+            path: "MachPatchTransitionSaveTests-\(UUID().uuidString)",
+            directoryHint: .isDirectory
+        )
+        defer { try? FileManager.default.removeItem(at: libraryURL) }
+        let library = PatchProjectLibrary(directoryURL: libraryURL)
+        let target = makeLoadedTarget()
+        let analysis = makeAnalysis(for: target)
+        let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
+        let model = WorkspaceModel(
+            loader: SuccessfulLoader(target: loadedTarget),
+            projectLibrary: library
+        )
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+        let incomingProject = try XCTUnwrap(model.patchProject)
+        let projectURL = temporaryProjectURL()
+        defer { try? FileManager.default.removeItem(at: projectURL) }
+        try PatchProjectCodec.encode(incomingProject).write(to: projectURL)
+        let method = try XCTUnwrap(analysis.metadata.classes.first?.instanceMethods.first)
+        try model.addPatch(className: "AppController", method: method)
+
+        model.openProject(at: projectURL)
+
+        XCTAssertEqual(model.pendingWorkspaceTransition, .openProject(projectURL))
+        XCTAssertEqual(model.projectDraft?.patches.count, 1)
+        model.saveAndPerformPendingWorkspaceTransition()
+        await waitForPatchProject(model, equalTo: incomingProject)
+
+        XCTAssertNil(model.pendingWorkspaceTransition)
+        XCTAssertEqual(model.patchProject, incomingProject)
+        XCTAssertFalse(model.hasUnsavedPatchChanges)
+        XCTAssertEqual(try XCTUnwrap(library.savedProjects().first).patchCount, 1)
+    }
+
+    func testExportedPatchProjectCanConfirmImageSwitchWithoutSavingAgain() async throws {
+        let target = makeLoadedTargetWithFramework()
+        let hostAnalysis = makeAnalysis(for: target)
+        let loadedTarget = target.replacingAnalysisState(.loaded(hostAnalysis))
+        let frameworkImage = try XCTUnwrap(
+            loadedTarget.images.first(where: { $0.image.kind == .dynamicFramework })?.image
+        )
+        let frameworkAnalysis = ObjectiveCAnalysis(
+            target: loadedTarget.target,
+            image: frameworkImage,
+            sliceIndex: 0,
+            architecture: hostAnalysis.architecture,
+            backend: hostAnalysis.backend,
+            warnings: [],
+            metadata: hostAnalysis.metadata
+        )
+        let model = WorkspaceModel(
+            loader: SuccessfulLoader(target: loadedTarget, analysis: frameworkAnalysis)
+        )
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+        let method = try XCTUnwrap(hostAnalysis.metadata.classes.first?.instanceMethods.first)
+        try model.addPatch(className: "AppController", method: method)
+
+        model.selectImage(id: frameworkImage.id)
+        XCTAssertEqual(model.pendingWorkspaceTransition, .selectImage(frameworkImage.id))
+        model.cancelPendingWorkspaceTransition()
+
+        let patchExportURL = URL(filePath: "/tmp/ExportedPatch.json")
+        model.handleProjectExport(.success(patchExportURL))
+        XCTAssertFalse(model.hasUnsavedPatchChanges)
+        XCTAssertEqual(
+            model.lastCompletedExport,
+            CompletedWorkspaceExport(kind: .patchProject, url: patchExportURL)
+        )
+        model.selectImage(id: frameworkImage.id)
+        XCTAssertEqual(model.pendingWorkspaceTransition, .selectImage(frameworkImage.id))
+        XCTAssertFalse(model.pendingWorkspaceTransitionHasUnsavedChanges)
+        XCTAssertEqual(model.projectDraft?.patches.count, 1)
+        model.discardAndPerformPendingWorkspaceTransition()
+        await waitForAnalysisToFinish(model)
+
+        XCTAssertNil(model.pendingWorkspaceTransition)
+        XCTAssertEqual(model.analysis?.image, frameworkImage)
     }
 
     func testSavedPatchLoadingFiltersByTargetAndDeletionRequiresConfirmation() async throws {
@@ -1123,6 +1363,17 @@ final class WorkspaceModelTests: XCTestCase {
             await Task.yield()
         }
         XCTFail("Patch project import did not finish")
+    }
+
+    private func waitForPatchProject(
+        _ model: WorkspaceModel,
+        equalTo expectedProject: PatchProject
+    ) async {
+        for _ in 0..<1_000 {
+            if model.patchProject == expectedProject { return }
+            await Task.yield()
+        }
+        XCTFail("Patch project did not finish loading")
     }
 
     private func waitForBuildToFinish(_ model: WorkspaceModel) async {
@@ -1374,6 +1625,36 @@ private struct SuccessfulLoader: TargetLoading {
         sliceIndex: Int
     ) async throws -> LoadedObjectiveCAnalysis {
         guard let analysis else { throw StubError.failed }
+        return LoadedObjectiveCAnalysis(
+            analysis: analysis,
+            patchabilityReport: ObjectiveCPatchabilityAnalyzer.report(for: analysis.metadata),
+            classBrowserTargets: ObjectiveCClassBrowserCatalog.targets(for: analysis)
+        )
+    }
+}
+
+private actor CountingLoader: TargetLoading {
+    let target: LoadedTarget
+    let analysis: ObjectiveCAnalysis
+    private(set) var analysisLoadCount = 0
+
+    init(target: LoadedTarget, analysis: ObjectiveCAnalysis) {
+        self.target = target
+        self.analysis = analysis
+    }
+
+    func loadTarget(at inputURL: URL) async throws -> LoadedTarget {
+        target
+    }
+
+    func loadAnalysis(
+        at inputURL: URL,
+        expectedHostSHA256: String,
+        imageID: String,
+        expectedImageSHA256: String,
+        sliceIndex: Int
+    ) async throws -> LoadedObjectiveCAnalysis {
+        analysisLoadCount += 1
         return LoadedObjectiveCAnalysis(
             analysis: analysis,
             patchabilityReport: ObjectiveCPatchabilityAnalyzer.report(for: analysis.metadata),

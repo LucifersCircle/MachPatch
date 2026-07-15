@@ -755,9 +755,14 @@ private struct PatchEditorView: View {
             .foregroundStyle(.tertiary)
             .textSelection(.enabled)
 
-        Button("Remove Patch", role: .destructive) {
-            model.removePatch(id: patch.id)
+        Button {
+            model.requestDeletePatch(patch)
+        } label: {
+            Label("Remove Patch", systemImage: "trash")
         }
+        .buttonStyle(.borderedProminent)
+        .tint(.accentColor)
+        .help("Remove this patch after confirmation.")
     }
 
     @ViewBuilder

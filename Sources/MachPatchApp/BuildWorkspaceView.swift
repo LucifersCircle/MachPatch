@@ -727,6 +727,17 @@ struct BuildWorkspaceView: View {
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+                if let completedExport = model.lastCompletedExport,
+                    completedExport.kind != .patchProject
+                {
+                    Divider()
+                    ShareLink(item: completedExport.url) {
+                        Label(completedExport.shareLabel, systemImage: "square.and.arrow.up")
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Open the native macOS share sheet for this completed export.")
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(8)

@@ -6,129 +6,155 @@ struct TargetSidebar: View {
     @ObservedObject var model: WorkspaceModel
 
     var body: some View {
-        List(selection: $model.navigation) {
-            Section {
-                Button {
-                    model.chooseTarget()
-                } label: {
-                    Label("Open Target…", systemImage: "folder.badge.plus")
-                }
-                .buttonStyle(.plain)
-            }
-
-            if case .loaded(let loadedTarget) = model.phase {
-                Section("Target") {
-                    Label {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(displayName(for: loadedTarget))
-                                .lineLimit(1)
-                            Text(loadedTarget.target.sourceType.rawValue.uppercased())
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    } icon: {
-                        TargetIconView(iconData: loadedTarget.iconData, size: 24)
+        VStack(spacing: 0) {
+            List(selection: $model.navigation) {
+                Section {
+                    Button {
+                        model.chooseTarget()
+                    } label: {
+                        Label("Open Target…", systemImage: "folder.badge.plus")
                     }
-                    .tag(WorkspaceNavigation.target)
+                    .buttonStyle(.plain)
                 }
 
-                Section("Architectures") {
-                    ForEach(loadedTarget.architectureReport.slices, id: \.index) { slice in
-                        Button {
-                            model.selectArchitecture(sliceIndex: slice.index)
-                        } label: {
-                            Label {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(slice.architecture.rawValue)
-                                    Text(slice.platform.rawValue)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            } icon: {
-                                architectureIcon(
-                                    sliceIndex: slice.index, supported: slice.supportedForPatching)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(!slice.supportedForPatching)
-                    }
-                }
-
-                Section("Images") {
-                    ForEach(loadedTarget.images) { image in
-                        Button {
-                            model.selectImage(id: image.id)
-                        } label: {
-                            Label {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(imageDisplayName(image.image))
-                                        .lineLimit(1)
-                                    Text(image.image.relativePath)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                    Text(imageSubtitle(image))
-                                        .font(.caption2)
-                                        .foregroundStyle(.tertiary)
-                                        .lineLimit(1)
-                                }
-                            } icon: {
-                                imageStatusIcon(image, loadedTarget: loadedTarget)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .help(imageHelp(image))
-                    }
-
-                    ForEach(
-                        Array(loadedTarget.target.imageDiscoveryIssues.enumerated()),
-                        id: \.offset
-                    ) { _, issue in
+                if case .loaded(let loadedTarget) = model.phase {
+                    Section("Target") {
                         Label {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(issue.relativeBundlePath)
+                                Text(displayName(for: loadedTarget))
                                     .lineLimit(1)
-                                Text(issue.message)
+                                Text(loadedTarget.target.sourceType.rawValue.uppercased())
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
-                                    .lineLimit(2)
                             }
                         } icon: {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
+                            TargetIconView(iconData: loadedTarget.iconData, size: 24)
                         }
-                        .help(issue.message)
+                        .tag(WorkspaceNavigation.target)
                     }
-                }
 
-                if let projectDraft = model.projectDraft {
-                    Section("Patch Project") {
-                        Label {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Build Workspace")
-                                Text(
-                                    "\(projectDraft.patches.count) patch\(projectDraft.patches.count == 1 ? "" : "es")"
-                                )
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                    Section("Architectures") {
+                        ForEach(loadedTarget.architectureReport.slices, id: \.index) { slice in
+                            Button {
+                                model.selectArchitecture(sliceIndex: slice.index)
+                            } label: {
+                                Label {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(slice.architecture.rawValue)
+                                        Text(slice.platform.rawValue)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                } icon: {
+                                    architectureIcon(
+                                        sliceIndex: slice.index,
+                                        supported: slice.supportedForPatching
+                                    )
+                                }
                             }
-                        } icon: {
-                            Image(systemName: "hammer.fill")
-                                .foregroundStyle(
-                                    model.navigation == .build
-                                        ? Color(nsColor: .alternateSelectedControlTextColor)
-                                        : .accentColor
-                                )
+                            .buttonStyle(.plain)
+                            .disabled(!slice.supportedForPatching)
                         }
-                        .tag(WorkspaceNavigation.build)
                     }
-                }
 
-                analysisNavigation(loadedTarget)
+                    Section("Images") {
+                        ForEach(loadedTarget.images) { image in
+                            Button {
+                                model.selectImage(id: image.id)
+                            } label: {
+                                Label {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(imageDisplayName(image.image))
+                                            .lineLimit(1)
+                                        Text(image.image.relativePath)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                        Text(imageSubtitle(image))
+                                            .font(.caption2)
+                                            .foregroundStyle(.tertiary)
+                                            .lineLimit(1)
+                                    }
+                                } icon: {
+                                    imageStatusIcon(image, loadedTarget: loadedTarget)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .contentShape(Rectangle())
+                            .help(imageHelp(image))
+                        }
+
+                        ForEach(
+                            Array(loadedTarget.target.imageDiscoveryIssues.enumerated()),
+                            id: \.offset
+                        ) { _, issue in
+                            Label {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(issue.relativeBundlePath)
+                                        .lineLimit(1)
+                                    Text(issue.message)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(2)
+                                }
+                            } icon: {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.orange)
+                            }
+                            .help(issue.message)
+                        }
+                    }
+
+                    analysisNavigation(loadedTarget)
+                }
+            }
+            .listStyle(.sidebar)
+
+            if let projectDraft = model.projectDraft {
+                Divider()
+                buildWorkspaceControl(projectDraft)
             }
         }
-        .listStyle(.sidebar)
         .navigationTitle("MachPatch")
+    }
+
+    private func buildWorkspaceControl(_ projectDraft: PatchProjectDraft) -> some View {
+        let isSelected = model.navigation == .build
+        let selectedText = Color(nsColor: .alternateSelectedControlTextColor)
+        return Button {
+            model.navigation = .build
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "hammer.fill")
+                    .font(.title3)
+                    .foregroundStyle(isSelected ? selectedText : .accentColor)
+                    .frame(width: 24)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Build Workspace")
+                        .font(.body.weight(.semibold))
+                    Text(
+                        "\(projectDraft.patches.count) patch\(projectDraft.patches.count == 1 ? "" : "es")"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(isSelected ? selectedText.opacity(0.82) : .secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(isSelected ? selectedText : .primary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
+            .contentShape(Rectangle())
+            .background(
+                isSelected ? Color.accentColor : Color.clear,
+                in: RoundedRectangle(cornerRadius: 8)
+            )
+        }
+        .buttonStyle(.plain)
+        .padding(8)
+        .help("Open the always-available build, verification, and export workspace.")
+        .accessibilityLabel("Build Workspace, \(projectDraft.patches.count) patches")
     }
 
     private func displayName(for loadedTarget: LoadedTarget) -> String {

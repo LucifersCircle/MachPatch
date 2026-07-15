@@ -176,7 +176,7 @@ explicit throughout the workflow.
 - A failure in any architecture probe blocks the type family rather than degrading to an unsafe
   cast.
 
-## Phase 6: release closure
+## Phase 6: release engineering
 
 ### Command-line and build provenance
 
@@ -193,13 +193,105 @@ explicit throughout the workflow.
 - Automate source generation, compile, verification, and package checks around that fixture.
 - Keep LiveContainer installation and launch as documented manual device gates.
 
+### Tests and acceptance
+
+- Prove that equivalent GUI and CLI packaging requests produce equivalent artifacts and
+  verification results.
+- Verify that build provenance changes when and only when its corresponding input changes.
+- Exercise menu enablement with no target, an invalid project, a stale build, a verified build,
+  and each supported export format.
+- Run the complete fixture workflow without relying on a decrypted third-party application.
+
+## Phase 7: stability and product polish
+
+### Unified unsaved-changes protection
+
+- Use one dirty-state guard before New Patch, Load Patch, Import Patch, Open Target, and switching
+  the selected target image or framework.
+- Offer Save and Continue, Discard Changes, and Cancel. Never overwrite a dirty project or trap
+  the user behind a save-only warning.
+- Treat an internal library save or exported patch-project JSON as a saved project baseline.
+  Dylib, source, and Debian artifact exports do not save the editable patch project.
+- Preserve the requested navigation action while the save panel or confirmation is active, then
+  perform it exactly once after a successful save or explicit discard.
+
+### Large-target performance
+
+- Profile target analysis, class and method filtering, SwiftUI invalidation, patch editing, source
+  generation, and per-image selection before choosing optimizations.
+- Cache immutable analysis and search indexes by target image identity. Do not repeat Mach-O or
+  Objective-C metadata work merely because the selection or editor state changed.
+- Debounce text search and avoid regenerating source or filtering every declaration for unrelated
+  view updates.
+- Use the current 3,461-class, roughly 46,000-method ScrabbleGo target as the local stress case,
+  while keeping redistributable synthetic performance fixtures in the test suite.
+
+### Editing and navigation polish
+
+- Make Remove Patch use the application accent and require a confirmation whose destructive
+  action uses native destructive styling.
+- Pin Build Workspace outside the scrolling class list so it remains reachable at every scroll
+  position and window size.
+- Add the native macOS share sheet after patch-project, dylib, source, and Debian exports without
+  changing the existing explicit save/export destinations.
+- Add the remaining useful class filters: UIKit subclasses, third-party SDK heuristic, and image.
+- Make patch logging destinations and levels understandable in the editor and generated output.
+- Decide whether active-Xcode discovery is sufficient or a pre-build toolchain selector is needed.
+
 ### Product and repository finish
 
 - Choose and add a project license before public release.
 - Replace stale schema/template placeholder READMEs with generated or authoritative references.
-- Add the remaining useful class filters: UIKit subclasses, third-party SDK heuristic, and image.
-- Make patch logging destinations and levels understandable in the editor and generated output.
-- Decide whether active-Xcode discovery is sufficient or a pre-build toolchain selector is needed.
+- Verify keyboard navigation, accessibility labels, narrow-window layouts, and native menu parity.
+- Exercise malformed projects, missing targets, missing Xcode installations, failed builds, stale
+  artifacts, and clean-machine first launch with actionable recovery messages.
+
+### Tests and acceptance
+
+- Add model tests for every dirty-state transition and UI tests for Save, Discard, and Cancel from
+  every guarded operation.
+- Confirm patch deletion cannot occur without confirmation and leaves selection and build state
+  consistent after deletion.
+- Measure and record the stress target's initial load, class search, method search, patch mutation,
+  and image-switch timings before and after optimization.
+- Verify every export can invoke the native share picker with the exact completed artifact.
+
+## Phase 8: opt-in runtime controls
+
+This phase begins only after the Phase 6 and Phase 7 acceptance gates pass. Its generated runtime
+surface is larger and more invasive than an ordinary method patch, so design and threat modeling
+precede implementation.
+
+### Project and state model
+
+- Let users explicitly choose which enabled patches appear in a generated floating control menu.
+- Start with enable/disable toggles. Design editable boolean, numeric, string, and grouped preset
+  controls separately rather than inferring controls from arbitrary patch payloads.
+- Give every exposed control a stable identifier, user-facing title, default value, and persistence
+  policy. Namespace persisted state by target identity and patch project.
+- Keep disabled project patches out of builds. A runtime-disabled exposed patch remains installed
+  but forwards the original invocation unchanged.
+
+### Generated runtime and overlay
+
+- Use an in-process state registry shared by the overlay and generated hooks. Do not require Darwin
+  notifications unless a future controller operates from another process.
+- Install the floating button only when at least one control is exposed. Support safe-area-aware
+  positioning, dragging, hiding, VoiceOver labels, and a gesture or project option that can recover
+  an off-screen button.
+- Avoid private APIs, avoid intercepting unrelated application events, and keep all UI work on the
+  main thread.
+- Make every controlled hook read state cheaply and atomically without changing the typed original
+  calling convention.
+
+### Safety and acceptance
+
+- Warn that the generated overlay becomes part of the target app's UI and may affect screenshots,
+  automation, and application review behavior.
+- Test launch timing, late-loaded classes, scene changes, rotations, repeated foregrounding,
+  multiple windows, persistence, and projects with no exposed controls.
+- Device-test toggles for immediate and late-loaded patches, verify that runtime-disabled patches
+  call the original unchanged, and confirm the target launches when overlay setup cannot complete.
 
 ## Deferred until evidence justifies them
 
@@ -217,5 +309,6 @@ explicit throughout the workflow.
 
 The roadmap is complete when the report shows that remaining unsupported declarations fall into
 documented deferred ABI families, all editor-visible types share validation and generation rules,
-the fixture workflow passes, release artifacts contain reproducible provenance, and the GUI and
-CLI expose the same supported capabilities.
+the fixture workflow passes, release artifacts contain reproducible provenance, destructive
+navigation cannot lose work, the stress target remains responsive, GUI and CLI capabilities agree,
+and opt-in runtime controls pass their separate device safety gates.

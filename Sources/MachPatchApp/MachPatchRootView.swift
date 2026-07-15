@@ -57,6 +57,13 @@ struct MachPatchRootView: View {
                         Label("Export Patch…", systemImage: "square.and.arrow.up")
                     }
                     .disabled(model.projectDraft == nil)
+
+                    if let completedExport = model.lastCompletedExport {
+                        Divider()
+                        ShareLink(item: completedExport.url) {
+                            Label(completedExport.shareLabel, systemImage: "square.and.arrow.up")
+                        }
+                    }
                 } label: {
                     Label("Patch Project", systemImage: "hammer")
                 }
@@ -138,7 +145,7 @@ struct MachPatchRootView: View {
         }
         .modifier(DeleteSavedPatchConfirmation(model: model))
         .modifier(DeletePatchConfirmation(model: model))
-        .modifier(NewPatchConfirmation(model: model))
+        .modifier(UnsavedChangesConfirmation(model: model))
         .modifier(TargetChangedConfirmation(model: model))
     }
 
@@ -175,27 +182,50 @@ private struct DeletePatchConfirmation: ViewModifier {
     }
 }
 
-private struct NewPatchConfirmation: ViewModifier {
+private struct UnsavedChangesConfirmation: ViewModifier {
     @ObservedObject var model: WorkspaceModel
 
     func body(content: Content) -> some View {
         content.confirmationDialog(
-            "Save Changes Before Starting a New Patch?",
-            isPresented: $model.isNewPatchConfirmationPresented
-        ) {
-            Button("Save and Start New") {
-                model.saveAndStartNewPatch()
+            model.pendingWorkspaceTransitionHasUnsavedChanges
+                ? "Save Changes Before Continuing?"
+                : "Replace Current Patch Project?",
+            isPresented: Binding(
+                get: { model.pendingWorkspaceTransition != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        model.cancelPendingWorkspaceTransition()
+                    }
+                }
+            ),
+            presenting: model.pendingWorkspaceTransition
+        ) { transition in
+            if model.pendingWorkspaceTransitionHasUnsavedChanges {
+                Button("Save and Continue") {
+                    model.saveAndPerformPendingWorkspaceTransition()
+                }
             }
-            Button("Start New Without Saving", role: .destructive) {
-                model.discardAndStartNewPatch()
+            Button(
+                model.pendingWorkspaceTransitionHasUnsavedChanges
+                    ? "Discard Changes"
+                    : transition.continueActionTitle,
+                role: .destructive
+            ) {
+                model.discardAndPerformPendingWorkspaceTransition()
             }
             Button("Cancel", role: .cancel) {
-                model.cancelNewPatch()
+                model.cancelPendingWorkspaceTransition()
             }
-        } message: {
-            Text(
-                "The current project has unsaved changes. Starting a new patch will reset its settings and remove all of its method patches."
-            )
+        } message: { transition in
+            if model.pendingWorkspaceTransitionHasUnsavedChanges {
+                Text(
+                    "The current project has unsaved changes. \(transition.confirmationMessage)"
+                )
+            } else {
+                Text(
+                    "\(transition.confirmationMessage) The saved project can be loaded again later."
+                )
+            }
         }
     }
 }
