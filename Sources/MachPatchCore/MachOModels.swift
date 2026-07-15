@@ -83,7 +83,7 @@ public struct MachOSlice: Codable, Equatable, Sendable {
     }
 }
 
-public enum MachOArchitecture: String, Codable, Equatable, Sendable {
+public enum MachOArchitecture: String, Codable, Equatable, Hashable, Sendable {
     case arm64
     case arm64e
     case arm64eLegacy

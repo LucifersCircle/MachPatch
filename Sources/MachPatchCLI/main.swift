@@ -16,6 +16,7 @@ struct MachPatchCommand {
           resolve <path>         Resolve an IPA, .app, or Mach-O executable.
           inspect <path> [--json]
                                  Inspect every Mach-O slice and load command.
+          architectures <path>  Report buildable device slices and architecture modes.
           classes <path> [--json]
                                  List normalized Objective-C classes.
           methods <path> <class> [--json]
@@ -24,8 +25,9 @@ struct MachPatchCommand {
                                  Validate a patch project, optionally against a target.
           generate <project> --output <directory>
                                  Generate deterministic Objective-C patch source.
-          build <project> --output <directory>
-                                 Build an ordinary arm64 iPhoneOS patch dylib.
+          build <project> --output <directory> [--arch <mode>]
+                                 Build an iPhoneOS patch dylib; mode is automatic, arm64,
+                                 arm64e, or universal.
 
         OPTIONS:
           --version             Show the MachPatch version.
@@ -57,6 +59,12 @@ struct MachPatchCommand {
                 exit(EX_USAGE)
             }
             inspect(path: arguments[1])
+        case "architectures":
+            guard arguments.count == 2 else {
+                writeError("Usage: machpatch architectures <path>\n")
+                exit(EX_USAGE)
+            }
+            architectures(path: arguments[1])
         case "classes":
             guard
                 arguments.count == 2
@@ -96,11 +104,17 @@ struct MachPatchCommand {
             }
             generate(projectPath: arguments[1], outputPath: arguments[3])
         case "build":
-            guard arguments.count == 4, arguments[2] == "--output" else {
-                writeError("Usage: machpatch build <project.json> --output <directory>\n")
+            guard let options = parseBuildOptions(arguments) else {
+                writeError(
+                    "Usage: machpatch build <project.json> --output <directory> [--arch automatic|arm64|arm64e|universal]\n"
+                )
                 exit(EX_USAGE)
             }
-            build(projectPath: arguments[1], outputPath: arguments[3])
+            build(
+                projectPath: arguments[1],
+                outputPath: options.outputPath,
+                architectureMode: options.architectureMode
+            )
         default:
             writeError("Unknown command or option: \(arguments[0])\n\n\(help)\n")
             exit(EX_USAGE)
@@ -126,6 +140,23 @@ struct MachPatchCommand {
         do {
             try InputResolver().withResolvedTarget(at: URL(filePath: path)) { target in
                 try writeJSON(try MachOInspector().inspect(target))
+            }
+        } catch {
+            writeError("error: \(error.localizedDescription)\n")
+            exit(EXIT_FAILURE)
+        }
+    }
+
+    private static func architectures(path: String) {
+        do {
+            try InputResolver().withResolvedTarget(at: URL(filePath: path)) { target in
+                let inspection = try MachOInspector().inspect(target)
+                try writeJSON(
+                    ArchitectureCommandOutput(
+                        target: target,
+                        report: ArchitectureResolver.report(for: inspection.slices)
+                    )
+                )
             }
         } catch {
             writeError("error: \(error.localizedDescription)\n")
@@ -262,18 +293,46 @@ struct MachPatchCommand {
         }
     }
 
-    private static func build(projectPath: String, outputPath: String) {
+    private static func build(
+        projectPath: String,
+        outputPath: String,
+        architectureMode: PatchArchitectureMode?
+    ) {
         do {
             let project = try readProject(at: URL(filePath: projectPath))
             let record = try PatchDylibBuilder().build(
                 project,
-                outputDirectory: URL(filePath: outputPath)
+                outputDirectory: URL(filePath: outputPath),
+                architectureMode: architectureMode
             )
             try writeJSON(record)
         } catch {
             writeError("error: \(error.localizedDescription)\n")
             exit(EXIT_FAILURE)
         }
+    }
+
+    private static func parseBuildOptions(_ arguments: [String]) -> BuildOptions? {
+        guard arguments.count == 4 || arguments.count == 6 else { return nil }
+        var outputPath: String?
+        var architectureMode: PatchArchitectureMode?
+        var index = 2
+        while index < arguments.count {
+            let flag = arguments[index]
+            let value = arguments[index + 1]
+            switch flag {
+            case "--output" where outputPath == nil:
+                outputPath = value
+            case "--arch" where architectureMode == nil:
+                architectureMode = PatchArchitectureMode(rawValue: value)
+                if architectureMode == nil { return nil }
+            default:
+                return nil
+            }
+            index += 2
+        }
+        guard let outputPath else { return nil }
+        return BuildOptions(outputPath: outputPath, architectureMode: architectureMode)
     }
 }
 
@@ -337,4 +396,14 @@ private struct GenerateOutput: Encodable {
     let projectPath: String
     let outputDirectory: String
     let files: [String]
+}
+
+private struct ArchitectureCommandOutput: Encodable {
+    let target: ResolvedTarget
+    let report: TargetArchitectureReport
+}
+
+private struct BuildOptions {
+    let outputPath: String
+    let architectureMode: PatchArchitectureMode?
 }

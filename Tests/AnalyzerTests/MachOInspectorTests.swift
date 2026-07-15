@@ -75,19 +75,30 @@ final class MachOInspectorTests: XCTestCase {
         XCTAssertEqual(slice.cpuSubtypeCapabilities, 0x8000_0000)
     }
 
+    func testDistinguishesLegacyUnversionedArm64e() throws {
+        let slices = try inspect(MachOFixtureFactory.thin64(cpuSubtype: 2, cryptID: 0))
+        let slice = try XCTUnwrap(slices.first)
+
+        XCTAssertEqual(slices.count, 1)
+        XCTAssertEqual(slice.architecture, .arm64eLegacy)
+        XCTAssertEqual(slice.cpuSubtype, 2)
+        XCTAssertEqual(slice.cpuSubtypeBase, 2)
+        XCTAssertEqual(slice.cpuSubtypeCapabilities, 0)
+    }
+
     func testInspectsEveryFatSlice() throws {
         let arm64 = MachOFixtureFactory.thin64(cpuSubtype: 0, cryptID: 0)
-        let arm64e = MachOFixtureFactory.thin64(cpuSubtype: 2, cryptID: 0)
+        let arm64e = MachOFixtureFactory.thin64(cpuSubtype: 0x8000_0002, cryptID: 0)
         let fat = MachOFixtureFactory.fat32(slices: [
             (MachOFixtureFactory.cpuTypeARM64, 0, arm64),
-            (MachOFixtureFactory.cpuTypeARM64, 2, arm64e),
+            (MachOFixtureFactory.cpuTypeARM64, 0x8000_0002, arm64e),
         ])
 
         let slices = try inspect(fat)
         XCTAssertEqual(slices.count, 2)
         XCTAssertEqual(slices.map(\.index), [0, 1])
         XCTAssertEqual(slices.map(\.architecture), [.arm64, .arm64e])
-        XCTAssertEqual(slices.map(\.cpuSubtype), [0, 2])
+        XCTAssertEqual(slices.map(\.cpuSubtype), [0, Int32(bitPattern: 0x8000_0002)])
         XCTAssertGreaterThan(slices[0].fileOffset, 0)
         XCTAssertGreaterThan(slices[1].fileOffset, slices[0].fileOffset)
         XCTAssertEqual(slices[0].fileSize, UInt64(arm64.count))

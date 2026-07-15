@@ -32,8 +32,17 @@ public struct AppleToolchainDiscoverer: Sendable {
             executablePath: clangPath,
             arguments: ["--version"]
         )
+        let lipoPath = try requiredOutput(
+            executablePath: "/usr/bin/xcrun",
+            arguments: ["--find", "lipo"]
+        )
+        let nmPath = try requiredOutput(
+            executablePath: "/usr/bin/xcrun",
+            arguments: ["--find", "nm"]
+        )
 
-        guard developerDirectory.hasPrefix("/"), clangPath.hasPrefix("/"), sdkPath.hasPrefix("/")
+        guard developerDirectory.hasPrefix("/"), clangPath.hasPrefix("/"), lipoPath.hasPrefix("/"),
+            nmPath.hasPrefix("/"), sdkPath.hasPrefix("/")
         else {
             throw AppleToolchainDiscoveryError.nonAbsolutePath
         }
@@ -42,6 +51,8 @@ public struct AppleToolchainDiscoverer: Sendable {
             xcodeVersion: xcodeVersion,
             clangPath: clangPath,
             clangVersion: clangVersion,
+            lipoPath: lipoPath,
+            nmPath: nmPath,
             sdkPath: sdkPath,
             sdkVersion: sdkVersion
         )

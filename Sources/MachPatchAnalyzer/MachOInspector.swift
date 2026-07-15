@@ -326,7 +326,11 @@ public struct MachOInspector: Sendable {
 
         return MachOSlice(
             index: index,
-            architecture: architecture(cpuType: cpuType, subtypeBase: subtypeBase),
+            architecture: architecture(
+                cpuType: cpuType,
+                subtypeBase: subtypeBase,
+                subtypeCapabilities: subtypeCapabilities
+            ),
             cpuType: cpuType,
             cpuSubtype: cpuSubtype,
             cpuSubtypeBase: subtypeBase,
@@ -418,12 +422,17 @@ public struct MachOInspector: Sendable {
         }
     }
 
-    private func architecture(cpuType: Int32, subtypeBase: UInt32) -> MachOArchitecture {
+    private func architecture(
+        cpuType: Int32,
+        subtypeBase: UInt32,
+        subtypeCapabilities: UInt32
+    ) -> MachOArchitecture {
         switch UInt32(bitPattern: cpuType) {
         case 0x0100_000C:
             switch subtypeBase {
             case 0, 1: .arm64
-            case 2: .arm64e
+            case 2:
+                subtypeCapabilities & 0x8000_0000 == 0 ? .arm64eLegacy : .arm64e
             default: .unknown
             }
         case 0x0200_000C:

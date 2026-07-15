@@ -85,10 +85,10 @@ final class AnalyzedPatchProjectValidatorTests: XCTestCase {
 
     func testSelectsTheExactArchitectureAndSubtypeFromFatBinary() throws {
         let arm64 = MachOFixtureFactory.thin64(cpuSubtype: 0, cryptID: 0)
-        let arm64e = MachOFixtureFactory.thin64(cpuSubtype: 2, cryptID: 0)
+        let arm64e = MachOFixtureFactory.thin64(cpuSubtype: 0x8000_0002, cryptID: 0)
         let fat = MachOFixtureFactory.fat32(slices: [
             (MachOFixtureFactory.cpuTypeARM64, 0, arm64),
-            (MachOFixtureFactory.cpuTypeARM64, 2, arm64e),
+            (MachOFixtureFactory.cpuTypeARM64, 0x8000_0002, arm64e),
         ])
         let url = FileManager.default.temporaryDirectory.appending(
             path: "MachPatch-PatchSliceFixture-\(UUID().uuidString)"
@@ -110,7 +110,10 @@ final class AnalyzedPatchProjectValidatorTests: XCTestCase {
 
         XCTAssertEqual(
             try AnalyzedPatchProjectValidator.selectedSliceIndex(
-                for: makeProject(architecture: .arm64e, cpuSubtype: 2),
+                for: makeProject(
+                    architecture: .arm64e,
+                    cpuSubtype: Int32(bitPattern: 0x8000_0002)
+                ),
                 in: target
             ),
             1

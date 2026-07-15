@@ -123,6 +123,25 @@ Substrate, ElleKit, libhooker, or jailbreak-bootstrap path may appear.
 Run the same command twice to exercise clean rebuilding. `MachPatchBuild.json` must contain the
 selected developer directory, Xcode/Clang/SDK versions, exact compiler argument array, captured
 stdout/stderr, termination status, and duration. The unit suite simulates compiler failure and
-requires diagnostics to surface while neither a stale nor partial dylib remains. arm64e projects
-stay blocked until the architecture resolver validates toolchain capability and output CPU
-subtype.
+requires diagnostics to surface while neither a stale nor partial dylib remains.
+
+## Architecture-resolution acceptance checks
+
+```bash
+.build/debug/machpatch architectures /path/to/Target.ipa
+.build/debug/machpatch build Examples/ExamplePatch.json \
+  --output /tmp/MachPatch-arm64 --arch arm64
+.build/debug/machpatch build Examples/ExamplePatch.json \
+  --output /tmp/MachPatch-universal --arch universal
+.build/debug/machpatch inspect /tmp/MachPatch-universal/ExamplePatch.dylib --json
+xcrun lipo -detailed_info /tmp/MachPatch-universal/ExamplePatch.dylib
+```
+
+For a dedicated modern arm64e fixture project, also build with `--arch automatic` and confirm the
+recorded raw CPU subtype equals the target subtype. Every requested slice must have a successful
+capability probe before project compilation starts. Native inspection must report iPhoneOS,
+matching deployment targets and install names, subtype `ARM64_ALL` for arm64, and a versioned
+pointer-authentication subtype for arm64e. Universal output is valid only when both retained thin
+slices export the same defined symbols and both fat slices agree with them. Legacy unversioned
+arm64e fixtures and simulator targets must produce blocking diagnostics rather than fallback
+output.

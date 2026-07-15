@@ -35,7 +35,7 @@ let package = Package(
         ),
         .target(
             name: "MachPatchBuilder",
-            dependencies: ["MachPatchCore", "MachPatchGenerator"]
+            dependencies: ["MachPatchAnalyzer", "MachPatchCore", "MachPatchGenerator"]
         ),
         .target(
             name: "MachPatchVerifier",

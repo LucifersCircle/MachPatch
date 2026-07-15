@@ -21,7 +21,7 @@ The intended dependency flow is:
 MachPatchCLI -> MachPatchCore
 MachPatchAnalyzer -> MachPatchCore
 MachPatchGenerator -> MachPatchCore
-MachPatchBuilder -> MachPatchGenerator + MachPatchCore
+MachPatchBuilder -> MachPatchAnalyzer + MachPatchGenerator + MachPatchCore
 MachPatchVerifier -> MachPatchAnalyzer + MachPatchCore
 MachPatchPackager -> MachPatchBuilder + MachPatchVerifier + MachPatchCore
 ```
@@ -137,16 +137,23 @@ direct `xcode-select` and `xcrun` process invocations. Discovery records the Xco
 SDK versions. Compilation then launches the resolved Clang executable directly with an argument
 array; user-controlled paths are never interpolated into a shell command.
 
-Milestone 6 resolves only ordinary arm64 builds. It checks the project architecture boundary,
-writes generated source atomically, removes stale regular dylib/build-record outputs, and invokes
-Clang with the configured deployment target and ARC mode. The output install name is always
-`@rpath/<outputName>.dylib`. Successful builds persist `MachPatchBuild.json` with the exact
-invocation and captured diagnostics. Failed compilation removes partial output. Existing symbolic
-link destinations and directory collisions are refused.
+`ArchitectureResolver` keeps policy separate from parsed Mach-O facts. Automatic mode follows the
+project's exact selected slice, explicit modes cannot relabel an incompatible target, and legacy
+unversioned arm64e is distinct from versioned pointer-authentication ABI output. Simulator and
+unsupported CPU families are reported but never selected.
 
-The builder intentionally does not guess arm64e support. CPU-subtype matching, toolchain
-capability probes, arm64e output validation, and universal output are owned by the next
-architecture-resolution milestone.
+Before compiling project source, the builder performs a minimal thin-dylib probe for every
+requested architecture and parses its CPU subtype, platform, and deployment target natively.
+arm64e probe metadata must exactly match a selected arm64e target subtype. Each compiled thin
+output is parsed again and compared with its probe. Universal builds retain separate arm64 and
+arm64e products, compare their externally defined symbol sets with the discovered `nm`, then use
+the discovered `lipo` only after both validate; the merged slices are parsed and compared with
+their thin inputs.
+
+Generated products use `@rpath/<outputName>.dylib`. Successful builds persist build-record format
+2 with the resolution reason, capability probes, thin-slice metadata, compiler invocations, and
+optional merge invocation. Failed compilation, validation, or merging removes partial products.
+Existing symbolic-link destinations and directory collisions are refused.
 
 ## Design constraints
 
@@ -174,3 +181,5 @@ architecture-resolution milestone.
    late-class retries.
 7. Discover the selected Xcode/iPhoneOS toolchain and build clean ordinary arm64 dylibs with
    recorded commands and diagnostics.
+8. Resolve automatic/explicit architectures, distinguish legacy and versioned arm64e, probe the
+   selected toolchain, compare generated CPU metadata, and merge only validated universal slices.

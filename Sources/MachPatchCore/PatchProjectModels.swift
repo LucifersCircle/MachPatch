@@ -77,6 +77,7 @@ public enum PatchArchitectureMode: String, Codable, Equatable, Sendable {
     case automatic
     case arm64
     case arm64e
+    case universal
 }
 
 public struct MethodPatch: Codable, Equatable, Identifiable, Sendable {
