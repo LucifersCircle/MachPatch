@@ -32,6 +32,9 @@ Actions use a `kind` discriminator. Value-producing actions include a JSON `valu
 { "kind": "returnBoolean", "value": true }
 { "kind": "returnSignedInteger", "value": -42 }
 { "kind": "returnUnsignedInteger", "value": 42 }
+{ "kind": "returnFloatingPoint", "value": 1.25 }
+{ "kind": "returnClassNamed", "value": "NSString" }
+{ "kind": "returnSelector", "value": "description" }
 { "kind": "returnString", "value": "Fixture" }
 {
   "kind": "returnObject",
@@ -58,7 +61,11 @@ Calling the original implementation and replacing its result uses a typed replac
 }
 ```
 
-Replacement kinds are `boolean`, `signedInteger`, `unsignedInteger`, `nil`, and `string`.
+Replacement kinds are `boolean`, `signedInteger`, `unsignedInteger`, `floatingPoint`, `nil`,
+`classNamed`, `selector`, and `string`. `nil` represents Objective-C `nil`, Class `Nil`, or SEL
+`NULL` according to the decoded return type. Named classes are resolved with `objc_getClass` and
+therefore return `Nil` when the class is unavailable. Named selectors are registered with
+`sel_registerName`.
 
 Foundation object construction supports Boolean, signed, and unsigned `NSNumber` values,
 string-only arrays and dictionaries, and `NSURL` values. It is available only for Objective-C
@@ -103,7 +110,10 @@ For example:
 }
 ```
 
-Argument values and comparisons are validated against the decoded ABI type. After-effects and
+Argument values and comparisons are validated against the decoded ABI type. Floating-point
+values use JSON numbers and must be finite; NaN, infinities, and values outside the encoded
+`float` range are rejected. Ordered comparisons support integer, `float`, and `double` sources.
+After-effects and
 argument replacement require a primary action that calls the original implementation. Invocation
 count conditions require the counter. Alert text is size-limited and presented asynchronously on
 the main queue. If any alert is already visible, a generated alert request is discarded rather
@@ -121,15 +131,18 @@ The decoder preserves raw encodings and tokenizes scalar types, objects and clas
 selectors, qualifiers, pointers, arrays, structs, unions, bit fields, blocks, and unknown types.
 Method frame sizes and argument offsets are accepted but are not treated as types.
 
-MVP-compatible signatures allow Boolean (`B`), signed and unsigned integer scalars, Objective-C
-objects, class objects, selectors as arguments, and `void` returns. Legacy `c` is an integer by
-default, never an implicit Boolean. Floating point, C strings, pointers, arrays, structures,
-unions, bit fields, blocks, and unknown types are decoded but rejected for patch generation until
-their complete ABI behavior is implemented.
+Compatible signatures allow Boolean (`B`), signed and unsigned integer scalars, `float` (`f`),
+`double` (`d`), Objective-C objects, class objects, selectors, and `void` returns. On supported
+64-bit iOS targets, an Objective-C `CGFloat` is represented by its analyzed `double` encoding; no
+source-level typedef guess is made. Legacy `c` is an integer by default, never an implicit
+Boolean. Long double, C strings, pointers, arrays, structures, unions, bit fields, blocks, and
+unknown types are decoded but rejected for patch generation until their complete ABI behavior is
+implemented.
 
 Selector colon count must match the number of explicit encoded arguments. Integer constants must
-fit the encoded width. Object strings are valid only for object returns, while `nil` is valid for
-object or class-object returns.
+fit the encoded width. Floating-point constants are rendered as locale-independent,
+round-trippable C literals after validation. Object strings are valid only for object returns,
+while `nil`/`NULL` is valid for object, class-object, or selector values.
 
 ## Validation
 
@@ -165,6 +178,11 @@ Direct return actions replace behavior without storing the previous IMP. Logging
 pointer. `logInvocation` and `logArguments` call the original unchanged;
 `logOriginalReturnValue` calls, logs, and returns it. `callOriginalAndReplace` calls the original
 before returning its typed replacement.
+
+Floating-point trampolines use exact `float` or `double` function-pointer types in argument and
+return positions. Logging promotes `float` to `double` for the variadic call and uses enough
+significant digits to preserve the encoded scalar value. Class and selector results remain typed
+as `Class` and `SEL`; they are never represented as integer or opaque pointer literals.
 
 Advanced effects are emitted in deterministic project order. Counters use atomic increments.
 Conditional returns run after before-effects and before argument replacement. Alerts add UIKit to

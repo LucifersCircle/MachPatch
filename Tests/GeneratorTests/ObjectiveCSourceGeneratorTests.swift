@@ -35,7 +35,12 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
         XCTAssertTrue(source.contains("return YES;"))
         XCTAssertTrue(source.contains("return (long long)-42LL;"))
         XCTAssertTrue(source.contains("return (unsigned long long)42ULL;"))
+        XCTAssertTrue(source.contains("static float MPPatch_13_FixtureManager_opacity_Replacement"))
+        XCTAssertTrue(source.contains("return 0x1.4p+0f;"))
         XCTAssertTrue(source.contains("return nil;"))
+        XCTAssertTrue(source.contains("return objc_getClass(\"NSString\");"))
+        XCTAssertTrue(source.contains("return sel_registerName(\"description\");"))
+        XCTAssertTrue(source.contains("return NULL;"))
         XCTAssertTrue(source.contains("return @\"Fixture\";"))
         XCTAssertTrue(source.contains("return @[@\"one\", @\"two\"];"))
         XCTAssertTrue(source.contains("[MachPatch] Invoked %@"))
@@ -107,6 +112,88 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
         XCTAssertTrue(first.contains("argument1 = @\"changed\";"))
         XCTAssertTrue(first.contains("NSLog(@\"before\");"))
         XCTAssertTrue(first.contains("NSLog(@\"after = %d\", (int)originalResult);"))
+    }
+
+    func testGeneratesFloatingPointClassAndSelectorFamilies() throws {
+        let floating = makePatch(
+            index: 30,
+            selector: "adjust:",
+            encoding: "d24@0:8f16",
+            action: .callOriginalAndReplace(.floatingPoint(4.5)),
+            advanced: PatchAdvancedConfiguration(
+                argumentReplacements: [
+                    PatchArgumentReplacement(argumentIndex: 0, value: .floatingPoint(2.5))
+                ],
+                conditionalReturn: PatchConditionalReturn(
+                    condition: PatchCondition(
+                        source: .argument(0),
+                        comparison: .greaterThan,
+                        value: .floatingPoint(1.5)
+                    ),
+                    replacement: .floatingPoint(3.5)
+                )
+            )
+        )
+        let loggedFloat = makePatch(
+            index: 31,
+            selector: "scaled:",
+            encoding: "f24@0:8f16",
+            action: .logArguments
+        )
+        let source = try generate(
+            makeProject(
+                patches: [floating, loggedFloat] + scalarClassAndSelectorPatches()
+            )
+        )
+
+        XCTAssertTrue(
+            source.contains("double (*MPPatch_0_FixtureManager_adjust_Function)(id, SEL, float)"))
+        XCTAssertTrue(source.contains("if (argument0 > 0x1.8p+0f)"))
+        XCTAssertTrue(source.contains("return 0x1.cp+1;"))
+        XCTAssertTrue(source.contains("argument0 = 0x1.4p+1f;"))
+        XCTAssertTrue(source.contains("return 0x1.2p+2;"))
+        XCTAssertTrue(source.contains("argument 1 = %.9g"))
+        XCTAssertTrue(source.contains("returned %.17g"))
+        XCTAssertTrue(source.contains("objc_getClass(\"NSString\")"))
+        XCTAssertTrue(source.contains("sel_registerName(\"description\")"))
+        XCTAssertTrue(source.contains("return NULL;"))
+        XCTAssertTrue(source.contains("NSStringFromSelector(originalResult)"))
+        XCTAssertTrue(source.contains("argument0 == NULL"))
+        XCTAssertTrue(source.contains("argument0 = NULL;"))
+    }
+
+    func testSafeScalarFamiliesPassDeviceClangWarningsAsErrors() throws {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/xcrun") else {
+            throw XCTSkip("xcrun is unavailable")
+        }
+        let workspace = FileManager.default.temporaryDirectory.appending(
+            path: "MachPatch-ScalarCompile-\(UUID().uuidString)",
+            directoryHint: .isDirectory
+        )
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let bundle = try ObjectiveCSourceGenerator().generate(
+            makeProject(patches: scalarClassAndSelectorPatches())
+        )
+        let sourceURL = try XCTUnwrap(GeneratedSourceWriter.write(bundle, to: workspace).first)
+
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(filePath: "/usr/bin/xcrun")
+        process.arguments = [
+            "--sdk", "iphoneos", "clang",
+            "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror",
+            "-fsyntax-only", "-arch", "arm64", "-miphoneos-version-min=15.0",
+            "-x", "objective-c", sourceURL.path,
+        ]
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+
+        let diagnostics = String(
+            decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self
+        )
+        XCTAssertEqual(process.terminationStatus, 0, diagnostics)
     }
 
     func testAdvancedUIKitSourcePassesDeviceClangWarningsAsErrors() throws {
@@ -191,8 +278,8 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
     func testMapsEverySupportedArgumentABIType() throws {
         let patch = makePatch(
             index: 1,
-            selector: "a:b:c:d:e:f:g:h:i:j:k:l:m:n:",
-            encoding: "v@:BcCsSiIlLqQ@#:",
+            selector: "a:b:c:d:e:f:g:h:i:j:k:l:m:n:o:p:",
+            encoding: "v@:BcCsSiIlLqQ@#:fd",
             action: .callOriginal
         )
 
@@ -213,6 +300,8 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
             "id argument11",
             "Class argument12",
             "SEL argument13",
+            "float argument14",
+            "double argument15",
         ] {
             XCTAssertTrue(source.contains(declaration), declaration)
         }
@@ -369,9 +458,9 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
             makeProject(
                 patches: allActionPatches() + [
                     makePatch(
-                        index: 13,
-                        selector: "a:b:c:d:e:f:g:h:i:j:k:l:m:n:",
-                        encoding: "v@:BcCsSiIlLqQ@#:",
+                        index: 30,
+                        selector: "a:b:c:d:e:f:g:h:i:j:k:l:m:n:o:p:",
+                        encoding: "v@:BcCsSiIlLqQ@#:fd",
                         action: .callOriginal
                     )
                 ]
@@ -475,6 +564,137 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
                 selector: "items",
                 encoding: "@@:",
                 action: .returnObject(.arrayOfStrings(["one", "two"]))
+            ),
+            makePatch(
+                index: 13,
+                selector: "opacity",
+                encoding: "f@:",
+                action: .returnFloatingPoint(1.25)
+            ),
+            makePatch(
+                index: 14,
+                selector: "modelClass",
+                encoding: "#@:",
+                action: .returnClassNamed("NSString")
+            ),
+            makePatch(
+                index: 15,
+                selector: "callbackSelector",
+                encoding: ":@:",
+                action: .returnSelector("description")
+            ),
+            makePatch(
+                index: 16,
+                selector: "optionalSelector",
+                encoding: ":@:",
+                action: .returnNil
+            ),
+        ]
+    }
+
+    private func scalarClassAndSelectorPatches() -> [MethodPatch] {
+        [
+            makePatch(
+                index: 40,
+                selector: "scale:",
+                encoding: "d24@0:8f16",
+                action: .logOriginalReturnValue,
+                advanced: PatchAdvancedConfiguration(
+                    argumentReplacements: [
+                        PatchArgumentReplacement(argumentIndex: 0, value: .floatingPoint(2.5))
+                    ],
+                    beforeEffects: [
+                        .customObjectiveC(PatchCustomObjectiveC(source: "(void)argument0;"))
+                    ],
+                    afterEffects: [
+                        .customObjectiveC(
+                            PatchCustomObjectiveC(
+                                source: "NSLog(@\"scaled = %.17g\", originalResult);"
+                            )
+                        )
+                    ],
+                    conditionalReturn: PatchConditionalReturn(
+                        condition: PatchCondition(
+                            source: .argument(0),
+                            comparison: .greaterThan,
+                            value: .floatingPoint(10.5)
+                        ),
+                        replacement: .floatingPoint(10.5)
+                    )
+                )
+            ),
+            makePatch(
+                index: 41,
+                selector: "modelClass",
+                encoding: "#@:",
+                action: .returnClassNamed("NSString")
+            ),
+            makePatch(
+                index: 42,
+                selector: "callbackSelector",
+                encoding: ":@:",
+                action: .returnSelector("description")
+            ),
+            makePatch(
+                index: 43,
+                selector: "optionalSelector",
+                encoding: ":@:",
+                action: .returnNil
+            ),
+            makePatch(
+                index: 44,
+                selector: "replacementSelector",
+                encoding: ":@:",
+                action: .callOriginalAndReplace(.selector("length"))
+            ),
+            makePatch(
+                index: 45,
+                selector: "loggedSelector",
+                encoding: ":@:",
+                action: .logOriginalReturnValue
+            ),
+            makePatch(
+                index: 46,
+                selector: "selectorFor:",
+                encoding: ":24@0:8:16",
+                action: .callOriginalAndReplace(.selector("length")),
+                advanced: PatchAdvancedConfiguration(
+                    argumentReplacements: [
+                        PatchArgumentReplacement(argumentIndex: 0, value: .nilValue)
+                    ],
+                    conditionalReturn: PatchConditionalReturn(
+                        condition: PatchCondition(
+                            source: .argument(0),
+                            comparison: .equal,
+                            value: .nilValue
+                        ),
+                        replacement: .selector("description")
+                    )
+                )
+            ),
+            makePatch(
+                index: 47,
+                selector: "leastFloat",
+                encoding: "f@:",
+                action: .returnFloatingPoint(Double(Float.leastNonzeroMagnitude))
+            ),
+            makePatch(
+                index: 48,
+                selector: "greatestFloat",
+                encoding: "f@:",
+                action: .returnFloatingPoint(Double(Float.greatestFiniteMagnitude))
+            ),
+            makePatch(
+                index: 49,
+                selector: "leastDouble",
+                encoding: "d@:",
+                action: .returnFloatingPoint(Double.leastNonzeroMagnitude)
+            ),
+            makePatch(
+                index: 50,
+                selector: "greatestDouble",
+                encoding: "d@:",
+                action: .returnFloatingPoint(Double.greatestFiniteMagnitude)
             ),
         ]
     }

@@ -115,7 +115,10 @@ public enum PatchAction: Equatable, Sendable {
     case returnBoolean(Bool)
     case returnSignedInteger(Int64)
     case returnUnsignedInteger(UInt64)
+    case returnFloatingPoint(Double)
     case returnNil
+    case returnClassNamed(String)
+    case returnSelector(String)
     case returnString(String)
     case returnObject(PatchObjectValue)
     case logInvocation
@@ -129,7 +132,10 @@ public enum PatchAction: Equatable, Sendable {
         case .returnBoolean: .returnBoolean
         case .returnSignedInteger: .returnSignedInteger
         case .returnUnsignedInteger: .returnUnsignedInteger
+        case .returnFloatingPoint: .returnFloatingPoint
         case .returnNil: .returnNil
+        case .returnClassNamed: .returnClassNamed
+        case .returnSelector: .returnSelector
         case .returnString: .returnString
         case .returnObject: .returnObject
         case .logInvocation: .logInvocation
@@ -142,8 +148,8 @@ public enum PatchAction: Equatable, Sendable {
 
     public var callsOriginal: Bool {
         switch self {
-        case .returnBoolean, .returnSignedInteger, .returnUnsignedInteger, .returnNil,
-            .returnString, .returnObject:
+        case .returnBoolean, .returnSignedInteger, .returnUnsignedInteger, .returnFloatingPoint,
+            .returnNil, .returnClassNamed, .returnSelector, .returnString, .returnObject:
             false
         case .logInvocation, .logArguments, .logOriginalReturnValue, .callOriginal,
             .callOriginalAndReplace:
@@ -156,7 +162,10 @@ public enum PatchActionKind: String, Codable, CaseIterable, Equatable, Sendable 
     case returnBoolean
     case returnSignedInteger
     case returnUnsignedInteger
+    case returnFloatingPoint
     case returnNil
+    case returnClassNamed
+    case returnSelector
     case returnString
     case returnObject
     case logInvocation
@@ -170,7 +179,10 @@ public enum PatchReturnValue: Equatable, Sendable {
     case boolean(Bool)
     case signedInteger(Int64)
     case unsignedInteger(UInt64)
+    case floatingPoint(Double)
     case nilValue
+    case classNamed(String)
+    case selector(String)
     case string(String)
 
     public var kind: PatchReturnValueKind {
@@ -178,7 +190,10 @@ public enum PatchReturnValue: Equatable, Sendable {
         case .boolean: .boolean
         case .signedInteger: .signedInteger
         case .unsignedInteger: .unsignedInteger
+        case .floatingPoint: .floatingPoint
         case .nilValue: .nilValue
+        case .classNamed: .classNamed
+        case .selector: .selector
         case .string: .string
         }
     }
@@ -188,7 +203,10 @@ public enum PatchReturnValueKind: String, Codable, Equatable, Sendable {
     case boolean
     case signedInteger
     case unsignedInteger
+    case floatingPoint
     case nilValue = "nil"
+    case classNamed
+    case selector
     case string
 }
 
@@ -210,8 +228,14 @@ extension PatchAction: Codable {
             self = .returnSignedInteger(try container.decode(Int64.self, forKey: .value))
         case .returnUnsignedInteger:
             self = .returnUnsignedInteger(try container.decode(UInt64.self, forKey: .value))
+        case .returnFloatingPoint:
+            self = .returnFloatingPoint(try container.decode(Double.self, forKey: .value))
         case .returnNil:
             self = .returnNil
+        case .returnClassNamed:
+            self = .returnClassNamed(try container.decode(String.self, forKey: .value))
+        case .returnSelector:
+            self = .returnSelector(try container.decode(String.self, forKey: .value))
         case .returnString:
             self = .returnString(try container.decode(String.self, forKey: .value))
         case .returnObject:
@@ -241,6 +265,12 @@ extension PatchAction: Codable {
             try container.encode(value, forKey: .value)
         case .returnUnsignedInteger(let value):
             try container.encode(value, forKey: .value)
+        case .returnFloatingPoint(let value):
+            try container.encode(value, forKey: .value)
+        case .returnClassNamed(let value):
+            try container.encode(value, forKey: .value)
+        case .returnSelector(let value):
+            try container.encode(value, forKey: .value)
         case .returnString(let value):
             try container.encode(value, forKey: .value)
         case .returnObject(let object):
@@ -269,8 +299,14 @@ extension PatchReturnValue: Codable {
             self = .signedInteger(try container.decode(Int64.self, forKey: .value))
         case .unsignedInteger:
             self = .unsignedInteger(try container.decode(UInt64.self, forKey: .value))
+        case .floatingPoint:
+            self = .floatingPoint(try container.decode(Double.self, forKey: .value))
         case .nilValue:
             self = .nilValue
+        case .classNamed:
+            self = .classNamed(try container.decode(String.self, forKey: .value))
+        case .selector:
+            self = .selector(try container.decode(String.self, forKey: .value))
         case .string:
             self = .string(try container.decode(String.self, forKey: .value))
         }
@@ -285,6 +321,12 @@ extension PatchReturnValue: Codable {
         case .signedInteger(let value):
             try container.encode(value, forKey: .value)
         case .unsignedInteger(let value):
+            try container.encode(value, forKey: .value)
+        case .floatingPoint(let value):
+            try container.encode(value, forKey: .value)
+        case .classNamed(let value):
+            try container.encode(value, forKey: .value)
+        case .selector(let value):
             try container.encode(value, forKey: .value)
         case .string(let value):
             try container.encode(value, forKey: .value)

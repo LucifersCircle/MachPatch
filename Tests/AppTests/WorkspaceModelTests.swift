@@ -602,6 +602,27 @@ final class WorkspaceModelTests: XCTestCase {
             ),
             "The complete method signature contains an unsupported ABI type."
         )
+
+        let floatingSignature = try ObjectiveCTypeEncodingDecoder.decodeMethodSignature("d16@0:8")
+        XCTAssertEqual(
+            PatchActionEditorPolicy.action(
+                for: .returnFloatingPoint,
+                signature: floatingSignature
+            ),
+            .returnFloatingPoint(0)
+        )
+
+        let classSignature = try ObjectiveCTypeEncodingDecoder.decodeMethodSignature("#16@0:8")
+        XCTAssertEqual(
+            PatchActionEditorPolicy.action(for: .returnClassNamed, signature: classSignature),
+            .returnClassNamed("NSObject")
+        )
+
+        let selectorSignature = try ObjectiveCTypeEncodingDecoder.decodeMethodSignature(":16@0:8")
+        XCTAssertEqual(
+            PatchActionEditorPolicy.action(for: .returnSelector, signature: selectorSignature),
+            .returnSelector("description")
+        )
     }
 
     func testPatchDraftRejectsMethodWithoutTypeEncoding() throws {

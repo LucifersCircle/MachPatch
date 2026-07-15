@@ -173,8 +173,10 @@ typed original IMP; direct-return actions do not. Missing classes are retried on
 The app's advanced patch editor can compose typed argument replacement, conditional results,
 thread-safe invocation counters, before/after alert presets, and expert Objective-C snippets around
 the primary action. It can also construct common Foundation object returns such as `NSNumber`,
-string arrays/dictionaries, and `NSURL`. Every option is validated against the decoded method
-signature before source generation or building.
+string arrays/dictionaries, and `NSURL`. Finite `float` and `double` values work in returns,
+arguments, conditions, logging, and original-result replacement. `Class` and `SEL` methods can
+return validated runtime names or explicit `Nil`/`NULL`. Every option is validated against the
+decoded method signature before source generation or building.
 
 ## Build a device dylib
 

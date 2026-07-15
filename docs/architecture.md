@@ -140,6 +140,12 @@ types, scopes sanitized identifiers by project index, emits the replacement, and
 installer. Original IMP storage is generated only for actions that call through. Object-returning
 selectors in retained method families receive the appropriate Clang ownership attribute.
 
+Scalar generation preserves the analyzed ABI rather than source typedef names: `f` emits `float`
+and `d` emits `double`, including 64-bit `CGFloat` encodings. Finite numeric values are rendered as
+locale-independent C literals, and variadic logging uses explicit promotions. Class and selector
+values use `objc_getClass`, `sel_registerName`, and typed `Nil`/`NULL` expressions instead of raw
+addresses.
+
 Installers use exact `method_getTypeEncoding` comparisons, `class_getInstanceMethod` for instance
 methods, and the same lookup on `object_getClass(cls)` for class methods. State transitions are
 pending, installed, or permanently failed. The constructor tries once immediately, then performs

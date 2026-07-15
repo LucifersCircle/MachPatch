@@ -367,6 +367,13 @@ struct AdvancedPatchEditorView: View {
                     get: { if case .unsignedInteger(let value) = value { value } else { 0 } },
                     set: { onChange(.unsignedInteger($0)) }
                 ), format: .number.grouping(.never))
+        case .float, .double:
+            TextField(
+                label,
+                value: Binding(
+                    get: { if case .floatingPoint(let value) = value { value } else { 0 } },
+                    set: { onChange(.floatingPoint($0)) }
+                ), format: .number.grouping(.never))
         case .object:
             Picker(
                 "\(label) Type",
@@ -402,14 +409,25 @@ struct AdvancedPatchEditorView: View {
                 TextField(label, text: Binding(get: { name }, set: { onChange(.classNamed($0)) }))
             }
         case .selector:
-            TextField(
-                label,
-                text: Binding(
-                    get: {
-                        if case .selector(let selector) = value { selector } else { "description" }
-                    },
-                    set: { onChange(.selector($0)) }
-                ))
+            Picker(
+                "\(label) Type",
+                selection: Binding(
+                    get: { value.kind.rawValue },
+                    set: {
+                        onChange(
+                            $0 == PatchValueKind.selector.rawValue
+                                ? .selector("description") : .nilValue)
+                    }
+                )
+            ) {
+                Text("NULL").tag(PatchValueKind.nilValue.rawValue)
+                Text("Named Selector").tag(PatchValueKind.selector.rawValue)
+            }
+            if case .selector(let selector) = value {
+                TextField(
+                    label,
+                    text: Binding(get: { selector }, set: { onChange(.selector($0)) }))
+            }
         default:
             Text("Unsupported value type")
                 .font(.caption)
@@ -450,6 +468,13 @@ struct AdvancedPatchEditorView: View {
                     get: { if case .unsignedInteger(let result) = value { result } else { 0 } },
                     set: { onChange(.unsignedInteger($0)) }
                 ), format: .number.grouping(.never))
+        case .float, .double:
+            TextField(
+                label,
+                value: Binding(
+                    get: { if case .floatingPoint(let result) = value { result } else { 0 } },
+                    set: { onChange(.floatingPoint($0)) }
+                ), format: .number.grouping(.never))
         case .object:
             Picker(
                 "\(label) Type",
@@ -468,7 +493,45 @@ struct AdvancedPatchEditorView: View {
                 TextField(label, text: Binding(get: { text }, set: { onChange(.string($0)) }))
             }
         case .classObject:
-            Text("Then Return · Nil")
+            Picker(
+                "\(label) Type",
+                selection: Binding(
+                    get: { value.kind.rawValue },
+                    set: {
+                        onChange(
+                            $0 == PatchReturnValueKind.classNamed.rawValue
+                                ? .classNamed("NSObject") : .nilValue)
+                    }
+                )
+            ) {
+                Text("Nil").tag(PatchReturnValueKind.nilValue.rawValue)
+                Text("Named Class").tag(PatchReturnValueKind.classNamed.rawValue)
+            }
+            if case .classNamed(let className) = value {
+                TextField(
+                    label,
+                    text: Binding(get: { className }, set: { onChange(.classNamed($0)) }))
+            }
+        case .selector:
+            Picker(
+                "\(label) Type",
+                selection: Binding(
+                    get: { value.kind.rawValue },
+                    set: {
+                        onChange(
+                            $0 == PatchReturnValueKind.selector.rawValue
+                                ? .selector("description") : .nilValue)
+                    }
+                )
+            ) {
+                Text("NULL").tag(PatchReturnValueKind.nilValue.rawValue)
+                Text("Named Selector").tag(PatchReturnValueKind.selector.rawValue)
+            }
+            if case .selector(let selector) = value {
+                TextField(
+                    label,
+                    text: Binding(get: { selector }, set: { onChange(.selector($0)) }))
+            }
         default:
             EmptyView()
         }
@@ -674,7 +737,7 @@ struct AdvancedPatchEditorView: View {
 
     private func comparisons(for source: PatchConditionSource) -> [PatchComparison] {
         let kind = type(for: source).kind
-        return kind.isSignedInteger || kind.isUnsignedInteger
+        return kind.isSignedInteger || kind.isUnsignedInteger || kind == .float || kind == .double
             ? PatchComparison.allCases : [.equal, .notEqual]
     }
 
@@ -683,8 +746,9 @@ struct AdvancedPatchEditorView: View {
         case .boolean: .boolean(false)
         case let kind where kind.isSignedInteger: .signedInteger(0)
         case let kind where kind.isUnsignedInteger: .unsignedInteger(0)
+        case .float, .double: .floatingPoint(0)
         case .object, .classObject: .nilValue
-        case .selector: .selector("description")
+        case .selector: .nilValue
         default: .nilValue
         }
     }
@@ -694,7 +758,10 @@ struct AdvancedPatchEditorView: View {
         case .boolean: .boolean(false)
         case let kind where kind.isSignedInteger: .signedInteger(0)
         case let kind where kind.isUnsignedInteger: .unsignedInteger(0)
-        case .object, .classObject: .nilValue
+        case .float, .double: .floatingPoint(0)
+        case .object: .nilValue
+        case .classObject: .classNamed("NSObject")
+        case .selector: .selector("description")
         default: .nilValue
         }
     }
@@ -736,6 +803,8 @@ private extension ObjectiveCTypeKind {
         case .boolean: "Boolean"
         case let kind where kind.isSignedInteger: "Signed Integer"
         case let kind where kind.isUnsignedInteger: "Unsigned Integer"
+        case .float: "Float"
+        case .double: "Double"
         case .object: "Object"
         case .classObject: "Class"
         case .selector: "Selector"

@@ -41,7 +41,10 @@ final class PatchProjectTests: XCTestCase {
             .returnBoolean(false),
             .returnSignedInteger(-42),
             .returnUnsignedInteger(42),
+            .returnFloatingPoint(1.25),
             .returnNil,
+            .returnClassNamed("NSObject"),
+            .returnSelector("description"),
             .returnString("Fixture"),
             .returnObject(.numberBoolean(true)),
             .returnObject(.numberSignedInteger(-42)),
@@ -56,7 +59,10 @@ final class PatchProjectTests: XCTestCase {
             .callOriginalAndReplace(.boolean(true)),
             .callOriginalAndReplace(.signedInteger(-1)),
             .callOriginalAndReplace(.unsignedInteger(1)),
+            .callOriginalAndReplace(.floatingPoint(-0.125)),
             .callOriginalAndReplace(.nilValue),
+            .callOriginalAndReplace(.classNamed("NSString")),
+            .callOriginalAndReplace(.selector("length")),
             .callOriginalAndReplace(.string("Replacement")),
         ]
 
@@ -218,6 +224,80 @@ final class PatchProjectTests: XCTestCase {
             }
         )
         XCTAssertTrue(validate(action: .returnUnsignedInteger(255), encoding: "C@:").isValid)
+    }
+
+    func testFloatingPointActionsValuesConditionsAndFiniteValidation() {
+        XCTAssertTrue(validate(action: .returnFloatingPoint(1.25), encoding: "f@:").isValid)
+        XCTAssertTrue(validate(action: .returnFloatingPoint(-0.125), encoding: "d@:").isValid)
+        XCTAssertTrue(
+            validate(action: .returnFloatingPoint(.nan), encoding: "d@:").errors.contains {
+                $0.code == .incompatibleAction
+            }
+        )
+        XCTAssertTrue(
+            validate(action: .returnFloatingPoint(.infinity), encoding: "d@:").errors.contains {
+                $0.code == .incompatibleAction
+            }
+        )
+        XCTAssertTrue(
+            validate(action: .returnFloatingPoint(Double.greatestFiniteMagnitude), encoding: "f@:")
+                .errors.contains { $0.code == .incompatibleAction }
+        )
+        XCTAssertTrue(
+            validate(action: .returnFloatingPoint(Double.leastNonzeroMagnitude), encoding: "f@:")
+                .errors.contains { $0.code == .incompatibleAction }
+        )
+
+        let advanced = PatchAdvancedConfiguration(
+            argumentReplacements: [
+                PatchArgumentReplacement(argumentIndex: 0, value: .floatingPoint(2.5))
+            ],
+            conditionalReturn: PatchConditionalReturn(
+                condition: PatchCondition(
+                    source: .argument(0),
+                    comparison: .greaterThanOrEqual,
+                    value: .floatingPoint(1.5)
+                ),
+                replacement: .floatingPoint(3.5)
+            )
+        )
+        let patch = makePatch(
+            selector: "adjust:",
+            encoding: "d24@0:8f16",
+            action: .callOriginalAndReplace(.floatingPoint(4.5)),
+            advanced: advanced
+        )
+        XCTAssertTrue(PatchProjectValidator.validate(makeProject(patches: [patch])).isValid)
+    }
+
+    func testNamedClassAndSelectorReturnsValidateRuntimeNamesAndNull() {
+        XCTAssertTrue(validate(action: .returnClassNamed("NSString"), encoding: "#@:").isValid)
+        XCTAssertTrue(validate(action: .returnSelector("description"), encoding: ":@:").isValid)
+        XCTAssertTrue(validate(action: .returnNil, encoding: ":@:").isValid)
+        XCTAssertTrue(
+            validate(action: .returnClassNamed("Bad Class"), encoding: "#@:").errors.contains {
+                $0.code == .incompatibleAction
+            }
+        )
+        XCTAssertTrue(
+            validate(action: .returnSelector("bad selector"), encoding: ":@:").errors.contains {
+                $0.code == .incompatibleAction
+            }
+        )
+
+        XCTAssertTrue(
+            validate(
+                action: .callOriginalAndReplace(.classNamed("NSObject")), encoding: "#@:"
+            ).isValid
+        )
+        XCTAssertTrue(
+            validate(
+                action: .callOriginalAndReplace(.selector("length")), encoding: ":@:"
+            ).isValid
+        )
+        XCTAssertTrue(
+            validate(action: .callOriginalAndReplace(.nilValue), encoding: ":@:").isValid
+        )
     }
 
     func testValidatesSelectorArityAndImplicitMethodArguments() {

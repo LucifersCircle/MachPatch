@@ -489,6 +489,12 @@ public enum PatchActionCompatibility {
                 .logOriginalReturnValue,
                 .callOriginalAndReplace,
             ])
+        case .float, .double:
+            actions.append(contentsOf: [
+                .returnFloatingPoint,
+                .logOriginalReturnValue,
+                .callOriginalAndReplace,
+            ])
         case .object:
             actions.append(contentsOf: [
                 .returnNil,
@@ -500,6 +506,14 @@ public enum PatchActionCompatibility {
         case .classObject:
             actions.append(contentsOf: [
                 .returnNil,
+                .returnClassNamed,
+                .logOriginalReturnValue,
+                .callOriginalAndReplace,
+            ])
+        case .selector:
+            actions.append(contentsOf: [
+                .returnNil,
+                .returnSelector,
                 .logOriginalReturnValue,
                 .callOriginalAndReplace,
             ])
@@ -526,6 +540,20 @@ public enum PatchActionCompatibility {
             return integerRangeError(value: value, kind: signature.returnType.kind)
         case .returnUnsignedInteger(let value):
             return unsignedIntegerRangeError(value: value, kind: signature.returnType.kind)
+        case .returnFloatingPoint(let value):
+            return floatingPointError(value: value, kind: signature.returnType.kind)
+        case .returnClassNamed(let className):
+            guard signature.returnType.kind == .classObject else {
+                return "Named-class return requires a Class return type."
+            }
+            return isRuntimeName(className)
+                ? nil : "Named-class return contains an invalid class name."
+        case .returnSelector(let selector):
+            guard signature.returnType.kind == .selector else {
+                return "Named-selector return requires a SEL return type."
+            }
+            return isRuntimeName(selector)
+                ? nil : "Named-selector return contains an invalid selector name."
         case .callOriginalAndReplace(let replacement):
             return replacementError(replacement, kind: signature.returnType.kind)
         case .returnObject(let object):
@@ -540,12 +568,13 @@ public enum PatchActionCompatibility {
 
     static func isSupportedReturnType(_ kind: ObjectiveCTypeKind) -> Bool {
         kind == .void || kind == .boolean || kind.isSignedInteger || kind.isUnsignedInteger
-            || kind == .object || kind == .classObject
+            || kind == .float || kind == .double || kind == .object || kind == .classObject
+            || kind == .selector
     }
 
     static func isSupportedArgumentType(_ kind: ObjectiveCTypeKind) -> Bool {
         kind == .boolean || kind.isSignedInteger || kind.isUnsignedInteger || kind == .object
-            || kind == .classObject || kind == .selector
+            || kind == .float || kind == .double || kind == .classObject || kind == .selector
     }
 
     private static func isSupportedSignature(_ signature: ObjectiveCMethodSignature) -> Bool {
@@ -580,9 +609,14 @@ public enum PatchActionCompatibility {
                 return "\(context) requires an unsigned integer value."
             }
             return unsignedIntegerRangeError(value: value, kind: kind)
+        case .floatingPoint(let value):
+            guard kind == .float || kind == .double else {
+                return "\(context) requires a floating-point value."
+            }
+            return floatingPointError(value: value, kind: kind)
         case .nilValue:
-            return kind == .object || kind == .classObject
-                ? nil : "\(context) can use nil only for object or Class values."
+            return kind == .object || kind == .classObject || kind == .selector
+                ? nil : "\(context) can use nil/NULL only for object, Class, or SEL values."
         case .string:
             return kind == .object ? nil : "\(context) can use a string only for object values."
         case .selector(let selector):
@@ -607,12 +641,13 @@ public enum PatchActionCompatibility {
         }
         let supportsOrdering =
             sourceType.kind.isSignedInteger || sourceType.kind.isUnsignedInteger
+            || sourceType.kind == .float || sourceType.kind == .double
         switch condition.comparison {
         case .equal, .notEqual:
             return nil
         case .lessThan, .lessThanOrEqual, .greaterThan, .greaterThanOrEqual:
             return supportsOrdering
-                ? nil : "Ordered comparisons require a signed or unsigned integer source."
+                ? nil : "Ordered comparisons require an integer or floating-point source."
         }
     }
 
@@ -631,9 +666,20 @@ public enum PatchActionCompatibility {
                 return replacementMismatch(replacement, kind: kind)
             }
             return unsignedIntegerRangeError(value: value, kind: kind)
+        case .floatingPoint(let value):
+            guard kind == .float || kind == .double else {
+                return replacementMismatch(replacement, kind: kind)
+            }
+            return floatingPointError(value: value, kind: kind)
         case .nilValue:
-            return kind == .object || kind == .classObject
+            return kind == .object || kind == .classObject || kind == .selector
                 ? nil : replacementMismatch(replacement, kind: kind)
+        case .classNamed(let className):
+            guard kind == .classObject else { return replacementMismatch(replacement, kind: kind) }
+            return isRuntimeName(className) ? nil : "Replacement contains an invalid class name."
+        case .selector(let selector):
+            guard kind == .selector else { return replacementMismatch(replacement, kind: kind) }
+            return isRuntimeName(selector) ? nil : "Replacement contains an invalid selector name."
         case .string:
             return kind == .object ? nil : replacementMismatch(replacement, kind: kind)
         }
@@ -692,6 +738,25 @@ public enum PatchActionCompatibility {
         }
         return value <= maximum
             ? nil : "Unsigned value \(value) does not fit return type '\(kind.rawValue)'."
+    }
+
+    private static func floatingPointError(
+        value: Double,
+        kind: ObjectiveCTypeKind
+    ) -> String? {
+        guard kind == .float || kind == .double else {
+            return "Floating-point action requires a float or double type."
+        }
+        guard value.isFinite else {
+            return "Floating-point values must be finite; NaN and infinity are not supported."
+        }
+        if kind == .float {
+            let converted = Float(value)
+            if !converted.isFinite || (value != 0 && converted == 0) {
+                return "Floating-point value \(value) does not fit return type 'float'."
+            }
+        }
+        return nil
     }
 }
 

@@ -781,6 +781,31 @@ private struct PatchEditorView: View {
             )
             actionExplanation(
                 "The original method is not called; this integer is returned instead.")
+        case .returnFloatingPoint(let value):
+            TextField(
+                signature.returnType.kind == .float ? "Float Result" : "Double Result",
+                value: actionBinding(patch: patch, value: value) { .returnFloatingPoint($0) },
+                format: .number.grouping(.never)
+            )
+            actionExplanation(
+                "The original method is not called; this finite floating-point value is returned instead."
+            )
+        case .returnClassNamed(let className):
+            TextField(
+                "Class Name",
+                text: actionBinding(patch: patch, value: className) { .returnClassNamed($0) }
+            )
+            actionExplanation(
+                "The original method is not called. MachPatch looks up this Objective-C class name at runtime and returns Nil if it is unavailable."
+            )
+        case .returnSelector(let selector):
+            TextField(
+                "Selector Name",
+                text: actionBinding(patch: patch, value: selector) { .returnSelector($0) }
+            )
+            actionExplanation(
+                "The original method is not called. MachPatch registers and returns this selector name."
+            )
         case .returnString(let value):
             TextField(
                 "String Result",
@@ -799,7 +824,11 @@ private struct PatchEditorView: View {
                 "The original method runs first. Its result is discarded and replaced with the value above."
             )
         case .returnNil:
-            actionExplanation("The original method is not called. This patch always returns nil.")
+            actionExplanation(
+                signature.returnType.kind == .selector
+                    ? "The original method is not called. This patch always returns NULL."
+                    : "The original method is not called. This patch always returns nil."
+            )
         case .logInvocation:
             actionExplanation(
                 "Writes a [MachPatch] NSLog entry containing the class and selector, then calls the original method unchanged. Read it through a LiveContainer console when available, or the device log in macOS Console."
@@ -907,6 +936,22 @@ private struct PatchEditorView: View {
                 value: replacementBinding(patch: patch, value: value) { .unsignedInteger($0) },
                 format: .number.grouping(.never)
             )
+        case .floatingPoint(let value):
+            TextField(
+                "Replacement Value",
+                value: replacementBinding(patch: patch, value: value) { .floatingPoint($0) },
+                format: .number.grouping(.never)
+            )
+        case .classNamed(let className):
+            TextField(
+                "Replacement Class Name",
+                text: replacementBinding(patch: patch, value: className) { .classNamed($0) }
+            )
+        case .selector(let selector):
+            TextField(
+                "Replacement Selector",
+                text: replacementBinding(patch: patch, value: selector) { .selector($0) }
+            )
         case .string(let value):
             TextField(
                 "Replacement String",
@@ -1011,7 +1056,10 @@ extension PatchActionKind {
         case .returnBoolean: "Return Boolean"
         case .returnSignedInteger: "Return Signed Integer"
         case .returnUnsignedInteger: "Return Unsigned Integer"
-        case .returnNil: "Return Nil"
+        case .returnFloatingPoint: "Return Floating-Point Value"
+        case .returnNil: "Return Nil / NULL"
+        case .returnClassNamed: "Return Named Class"
+        case .returnSelector: "Return Named Selector"
         case .returnString: "Return String"
         case .returnObject: "Return Foundation Object"
         case .logInvocation: "Log Invocation"
@@ -1028,7 +1076,11 @@ extension PatchActionKind {
         case .returnSignedInteger: "Return a constant signed integer without calling the original."
         case .returnUnsignedInteger:
             "Return a constant unsigned integer without calling the original."
-        case .returnNil: "Return nil without calling the original."
+        case .returnFloatingPoint:
+            "Return a constant finite float or double without calling the original."
+        case .returnNil: "Return nil or NULL without calling the original."
+        case .returnClassNamed: "Look up and return an Objective-C class by name."
+        case .returnSelector: "Register and return an Objective-C selector by name."
         case .returnString: "Return a constant Objective-C string without calling the original."
         case .returnObject: "Construct and return an NSNumber, collection, or NSURL."
         case .logInvocation: "Log the class and selector, then call the original unchanged."

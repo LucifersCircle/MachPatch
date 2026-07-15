@@ -453,8 +453,14 @@ struct BuildWorkspaceView: View {
                 "Return Signed Integer · \(value)"
             case .returnUnsignedInteger(let value):
                 "Return Unsigned Integer · \(value)"
+            case .returnFloatingPoint(let value):
+                "Return Floating-Point Value · \(value)"
             case .returnNil:
                 "Return Nil"
+            case .returnClassNamed(let className):
+                "Return Class · \(className)"
+            case .returnSelector(let selector):
+                "Return Selector · \(selector)"
             case .returnString(let value):
                 "Return String · \(value.isEmpty ? "Empty string" : "“\(value)”")"
             case .returnObject(let value):
@@ -508,7 +514,10 @@ struct BuildWorkspaceView: View {
         case .boolean(let value): value ? "True" : "False"
         case .signedInteger(let value): String(value)
         case .unsignedInteger(let value): String(value)
+        case .floatingPoint(let value): String(value)
         case .nilValue: "nil"
+        case .classNamed(let className): "Class \(className)"
+        case .selector(let selector): "selector \(selector)"
         case .string(let value): value.isEmpty ? "an empty string" : "“\(value)”"
         }
     }

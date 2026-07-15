@@ -93,6 +93,13 @@ private struct PatchGenerationContext {
         }
     }
 
+    var needsAlertRuntime: Bool {
+        (advanced.beforeEffects + advanced.afterEffects).contains { effect in
+            if case .showAlert = effect { return true }
+            return false
+        }
+    }
+
     var objcDescription: String {
         let marker = patch.methodKind == .instance ? "-" : "+"
         return "\(marker)[\(patch.className) \(patch.selector)]"
@@ -138,6 +145,8 @@ private enum ObjectiveCTypeMapper {
         case .unsignedLong: "unsigned long"
         case .signedLongLong: "long long"
         case .unsignedLongLong: "unsigned long long"
+        case .float: "float"
+        case .double: "double"
         case .object: "id"
         case .classObject: "Class"
         case .selector: "SEL"
@@ -159,7 +168,7 @@ private struct SourceRenderer {
 
     func render() -> String {
         var sections: [String] = [header]
-        if contexts.contains(where: \.needsUIKit) {
+        if contexts.contains(where: \.needsAlertRuntime) {
             sections.append(alertRuntime)
         }
         sections.append(contexts.map(renderPatch).joined(separator: "\n\n"))
@@ -339,12 +348,22 @@ private struct SourceRenderer {
             primary =
                 unusedParameterLines(context)
                 + ["return (\(context.returnType))\(value)ULL;"]
+        case .returnFloatingPoint(let value):
+            primary =
+                unusedParameterLines(context)
+                + ["return \(floatingLiteral(value, kind: context.signature.returnType.kind));"]
         case .returnNil:
             primary =
-                unusedParameterLines(context) + [
-                    context.signature.returnType.kind == .classObject
-                        ? "return Nil;" : "return nil;"
-                ]
+                unusedParameterLines(context)
+                + ["return \(nullLiteral(for: context.signature.returnType.kind));"]
+        case .returnClassNamed(let className):
+            primary =
+                unusedParameterLines(context)
+                + ["return objc_getClass(\(CLiteral.string(className)));"]
+        case .returnSelector(let selector):
+            primary =
+                unusedParameterLines(context)
+                + ["return sel_registerName(\(CLiteral.string(selector)));"]
         case .returnString(let value):
             primary =
                 unusedParameterLines(context)
@@ -412,6 +431,12 @@ private struct SourceRenderer {
         case let kind where kind.isUnsignedInteger:
             return
                 "NSLog(@\"[MachPatch] %@ argument \(index + 1) = %llu\", \(description), (unsigned long long)\(argument.name));"
+        case .float:
+            return
+                "NSLog(@\"[MachPatch] %@ argument \(index + 1) = %.9g\", \(description), (double)\(argument.name));"
+        case .double:
+            return
+                "NSLog(@\"[MachPatch] %@ argument \(index + 1) = %.17g\", \(description), \(argument.name));"
         case .object, .classObject:
             return
                 "NSLog(@\"[MachPatch] %@ argument \(index + 1) = %@\", \(description), \(argument.name));"
@@ -440,8 +465,20 @@ private struct SourceRenderer {
             lines.append(
                 "NSLog(@\"[MachPatch] %@ returned %llu\", \(description), (unsigned long long)\(result));"
             )
+        case .float:
+            lines.append(
+                "NSLog(@\"[MachPatch] %@ returned %.9g\", \(description), (double)\(result));"
+            )
+        case .double:
+            lines.append(
+                "NSLog(@\"[MachPatch] %@ returned %.17g\", \(description), \(result));"
+            )
         case .object, .classObject:
             lines.append("NSLog(@\"[MachPatch] %@ returned %@\", \(description), \(result));")
+        case .selector:
+            lines.append(
+                "NSLog(@\"[MachPatch] %@ returned %@\", \(description), \(result) == NULL ? @\"(null)\" : NSStringFromSelector(\(result)));"
+            )
         default:
             preconditionFailure("Unsupported return reached source generation")
         }
@@ -515,11 +552,16 @@ private struct SourceRenderer {
             }
             return condition.comparison == .notEqual ? "!(\(equality))" : equality
         case .selector:
-            guard case .selector(let value) = condition.value else {
+            let equality: String
+            switch condition.value {
+            case .nilValue:
+                equality = "\(source) == NULL"
+            case .selector(let value):
+                equality =
+                    "sel_isEqual(\(source), sel_registerName(\(CLiteral.string(value))))"
+            default:
                 preconditionFailure("Invalid selector condition reached source generation")
             }
-            let equality =
-                "sel_isEqual(\(source), sel_registerName(\(CLiteral.string(value))))"
             return condition.comparison == .notEqual ? "!(\(equality))" : equality
         default:
             let cType = ObjectiveCTypeMapper.cTypeUnchecked(for: type)
@@ -548,7 +590,8 @@ private struct SourceRenderer {
         case .boolean(let value): value ? "YES" : "NO"
         case .signedInteger(let value): "(\(cType))\(signedLiteral(value))"
         case .unsignedInteger(let value): "(\(cType))\(value)ULL"
-        case .nilValue: target.kind == .classObject ? "Nil" : "nil"
+        case .floatingPoint(let value): floatingLiteral(value, kind: target.kind)
+        case .nilValue: nullLiteral(for: target.kind)
         case .string(let value): ObjectiveCLiteral.string(value)
         case .selector(let value): "sel_registerName(\(CLiteral.string(value)))"
         case .classNamed(let value): "objc_getClass(\(CLiteral.string(value)))"
@@ -583,8 +626,35 @@ private struct SourceRenderer {
         case .boolean(let value): value ? "YES" : "NO"
         case .signedInteger(let value): "(\(context.returnType))\(signedLiteral(value))"
         case .unsignedInteger(let value): "(\(context.returnType))\(value)ULL"
-        case .nilValue: context.signature.returnType.kind == .classObject ? "Nil" : "nil"
+        case .floatingPoint(let value):
+            floatingLiteral(value, kind: context.signature.returnType.kind)
+        case .nilValue: nullLiteral(for: context.signature.returnType.kind)
+        case .classNamed(let className): "objc_getClass(\(CLiteral.string(className)))"
+        case .selector(let selector): "sel_registerName(\(CLiteral.string(selector)))"
         case .string(let value): ObjectiveCLiteral.string(value)
+        }
+    }
+
+    private func floatingLiteral(_ value: Double, kind: ObjectiveCTypeKind) -> String {
+        if kind == .float {
+            return "\(hexadecimalFloatingLiteral(Double(Float(value))))f"
+        }
+        return hexadecimalFloatingLiteral(value)
+    }
+
+    private func hexadecimalFloatingLiteral(_ value: Double) -> String {
+        String(
+            format: "%a",
+            locale: Locale(identifier: "en_US_POSIX"),
+            arguments: [value]
+        )
+    }
+
+    private func nullLiteral(for kind: ObjectiveCTypeKind) -> String {
+        switch kind {
+        case .classObject: "Nil"
+        case .selector: "NULL"
+        default: "nil"
         }
     }
 

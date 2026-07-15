@@ -116,6 +116,7 @@ public enum PatchValue: Equatable, Sendable {
     case boolean(Bool)
     case signedInteger(Int64)
     case unsignedInteger(UInt64)
+    case floatingPoint(Double)
     case nilValue
     case string(String)
     case selector(String)
@@ -126,6 +127,7 @@ public enum PatchValue: Equatable, Sendable {
         case .boolean: .boolean
         case .signedInteger: .signedInteger
         case .unsignedInteger: .unsignedInteger
+        case .floatingPoint: .floatingPoint
         case .nilValue: .nilValue
         case .string: .string
         case .selector: .selector
@@ -138,6 +140,7 @@ public enum PatchValueKind: String, Codable, CaseIterable, Equatable, Sendable {
     case boolean
     case signedInteger
     case unsignedInteger
+    case floatingPoint
     case nilValue = "nil"
     case string
     case selector
@@ -258,6 +261,8 @@ extension PatchValue: Codable {
             self = .signedInteger(try container.decode(Int64.self, forKey: .value))
         case .unsignedInteger:
             self = .unsignedInteger(try container.decode(UInt64.self, forKey: .value))
+        case .floatingPoint:
+            self = .floatingPoint(try container.decode(Double.self, forKey: .value))
         case .nilValue:
             self = .nilValue
         case .string:
@@ -276,6 +281,7 @@ extension PatchValue: Codable {
         case .boolean(let value): try container.encode(value, forKey: .value)
         case .signedInteger(let value): try container.encode(value, forKey: .value)
         case .unsignedInteger(let value): try container.encode(value, forKey: .value)
+        case .floatingPoint(let value): try container.encode(value, forKey: .value)
         case .string(let value): try container.encode(value, forKey: .value)
         case .selector(let value): try container.encode(value, forKey: .value)
         case .classNamed(let value): try container.encode(value, forKey: .value)

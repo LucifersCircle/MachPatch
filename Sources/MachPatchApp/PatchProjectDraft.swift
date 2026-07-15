@@ -178,8 +178,14 @@ enum PatchActionEditorPolicy {
             return .returnSignedInteger(0)
         case .returnUnsignedInteger:
             return .returnUnsignedInteger(0)
+        case .returnFloatingPoint:
+            return .returnFloatingPoint(0)
         case .returnNil:
             return .returnNil
+        case .returnClassNamed:
+            return .returnClassNamed("NSObject")
+        case .returnSelector:
+            return .returnSelector("description")
         case .returnString:
             return .returnString("")
         case .returnObject:
@@ -218,8 +224,14 @@ enum PatchActionEditorPolicy {
             return "Requires a signed integer return; this method returns \(returnType)."
         case .returnUnsignedInteger:
             return "Requires an unsigned integer return; this method returns \(returnType)."
+        case .returnFloatingPoint:
+            return "Requires a float or double return; this method returns \(returnType)."
         case .returnNil:
-            return "Requires an object or Class return; this method returns \(returnType)."
+            return "Requires an object, Class, or SEL return; this method returns \(returnType)."
+        case .returnClassNamed:
+            return "Requires a Class return; this method returns \(returnType)."
+        case .returnSelector:
+            return "Requires a SEL return; this method returns \(returnType)."
         case .returnString:
             return "Requires an Objective-C object return; this method returns \(returnType)."
         case .returnObject:
@@ -241,8 +253,14 @@ enum PatchActionEditorPolicy {
             .signedInteger(0)
         case let kind where kind.isUnsignedInteger:
             .unsignedInteger(0)
-        case .object, .classObject:
+        case .float, .double:
+            .floatingPoint(0)
+        case .object:
             .nilValue
+        case .classObject:
+            .classNamed("NSObject")
+        case .selector:
+            .selector("description")
         default:
             nil
         }

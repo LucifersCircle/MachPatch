@@ -16,6 +16,8 @@ final class ObjectiveCPatchabilityReportTests: XCTestCase {
                         makeMethod("takesValue:", encoding: "v16@0:8"),
                         makeMethod("floatingResult", encoding: "d16@0:8"),
                         makeMethod("takesFloating:", encoding: "v24@0:8d16"),
+                        makeMethod("structureResult", encoding: "{Point=dd}16@0:8"),
+                        makeMethod("takesStructure:", encoding: "v32@0:8{Point=dd}16"),
                     ]
                 )
             ],
@@ -33,28 +35,28 @@ final class ObjectiveCPatchabilityReportTests: XCTestCase {
 
         XCTAssertEqual(report.summary.classCount, 1)
         XCTAssertEqual(report.summary.categoryCount, 1)
-        XCTAssertEqual(report.summary.classMethodCount, 7)
+        XCTAssertEqual(report.summary.classMethodCount, 9)
         XCTAssertEqual(report.summary.categoryMethodCount, 1)
-        XCTAssertEqual(report.summary.patchableClassMethodCount, 1)
+        XCTAssertEqual(report.summary.patchableClassMethodCount, 3)
         XCTAssertEqual(report.summary.patchableCategoryMethodCount, 1)
         XCTAssertEqual(report.summary.unavailableClassMethodCount, 6)
         XCTAssertEqual(report.summary.unavailableCategoryMethodCount, 0)
-        XCTAssertEqual(report.summary.methodCount, 8)
-        XCTAssertEqual(report.summary.patchableMethodCount, 2)
+        XCTAssertEqual(report.summary.methodCount, 10)
+        XCTAssertEqual(report.summary.patchableMethodCount, 4)
         XCTAssertEqual(report.summary.unavailableMethodCount, 6)
         XCTAssertEqual(
             report.summary.unsupportedTypeCounts,
             [
                 ObjectiveCUnsupportedTypeCount(
                     role: .argument,
-                    typeKind: .double,
-                    typeEncoding: "d",
+                    typeKind: .structure,
+                    typeEncoding: "{Point=dd}",
                     count: 1
                 ),
                 ObjectiveCUnsupportedTypeCount(
                     role: .returnValue,
-                    typeKind: .double,
-                    typeEncoding: "d",
+                    typeKind: .structure,
+                    typeEncoding: "{Point=dd}",
                     count: 1
                 ),
             ]
@@ -79,12 +81,14 @@ final class ObjectiveCPatchabilityReportTests: XCTestCase {
         assertIssue(.invalidTypeEncoding, for: "invalid", in: bySelector)
         assertIssue(.invalidImplicitArguments, for: "badImplicit", in: bySelector)
         assertIssue(.selectorArgumentCountMismatch, for: "takesValue:", in: bySelector)
-        assertIssue(.unsupportedReturnType, for: "floatingResult", in: bySelector)
-        assertIssue(.unsupportedArgumentType, for: "takesFloating:", in: bySelector)
+        XCTAssertTrue(try XCTUnwrap(bySelector["floatingResult"]).isPatchable)
+        XCTAssertTrue(try XCTUnwrap(bySelector["takesFloating:"]).isPatchable)
+        assertIssue(.unsupportedReturnType, for: "structureResult", in: bySelector)
+        assertIssue(.unsupportedArgumentType, for: "takesStructure:", in: bySelector)
 
-        let unsupportedArgument = try XCTUnwrap(bySelector["takesFloating:"]?.issues.first)
-        XCTAssertEqual(unsupportedArgument.typeKind, .double)
-        XCTAssertEqual(unsupportedArgument.typeEncoding, "d")
+        let unsupportedArgument = try XCTUnwrap(bySelector["takesStructure:"]?.issues.first)
+        XCTAssertEqual(unsupportedArgument.typeKind, .structure)
+        XCTAssertEqual(unsupportedArgument.typeEncoding, "{Point=dd}")
         XCTAssertEqual(unsupportedArgument.argumentPosition, 1)
     }
 
@@ -94,8 +98,8 @@ final class ObjectiveCPatchabilityReportTests: XCTestCase {
                 makeClass(
                     name: "Fixture",
                     methods: [
-                        makeMethod("doubleOne", encoding: "d16@0:8"),
-                        makeMethod("doubleTwo", encoding: "d16@0:8"),
+                        makeMethod("structureOne", encoding: "{Point=dd}16@0:8"),
+                        makeMethod("structureTwo", encoding: "{Point=dd}16@0:8"),
                         makeMethod("missingOne", encoding: nil),
                         makeMethod("missingTwo", encoding: nil),
                         makeMethod("invalid", encoding: "x"),
