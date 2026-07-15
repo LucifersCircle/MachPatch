@@ -19,7 +19,9 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "MachPatchCLI",
-            dependencies: ["MachPatchAnalyzer", "MachPatchCore", "MachPatchGenerator"]
+            dependencies: [
+                "MachPatchAnalyzer", "MachPatchBuilder", "MachPatchCore", "MachPatchGenerator",
+            ]
         ),
         .target(name: "MachPatchCore"),
         .target(

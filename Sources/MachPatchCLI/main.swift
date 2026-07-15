@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import MachPatchAnalyzer
+import MachPatchBuilder
 import MachPatchCore
 import MachPatchGenerator
 
@@ -23,6 +24,8 @@ struct MachPatchCommand {
                                  Validate a patch project, optionally against a target.
           generate <project> --output <directory>
                                  Generate deterministic Objective-C patch source.
+          build <project> --output <directory>
+                                 Build an ordinary arm64 iPhoneOS patch dylib.
 
         OPTIONS:
           --version             Show the MachPatch version.
@@ -92,6 +95,12 @@ struct MachPatchCommand {
                 exit(EX_USAGE)
             }
             generate(projectPath: arguments[1], outputPath: arguments[3])
+        case "build":
+            guard arguments.count == 4, arguments[2] == "--output" else {
+                writeError("Usage: machpatch build <project.json> --output <directory>\n")
+                exit(EX_USAGE)
+            }
+            build(projectPath: arguments[1], outputPath: arguments[3])
         default:
             writeError("Unknown command or option: \(arguments[0])\n\n\(help)\n")
             exit(EX_USAGE)
@@ -247,6 +256,20 @@ struct MachPatchCommand {
                     files: writtenURLs.map(\.path)
                 )
             )
+        } catch {
+            writeError("error: \(error.localizedDescription)\n")
+            exit(EXIT_FAILURE)
+        }
+    }
+
+    private static func build(projectPath: String, outputPath: String) {
+        do {
+            let project = try readProject(at: URL(filePath: projectPath))
+            let record = try PatchDylibBuilder().build(
+                project,
+                outputDirectory: URL(filePath: outputPath)
+            )
+            try writeJSON(record)
         } catch {
             writeError("error: \(error.localizedDescription)\n")
             exit(EXIT_FAILURE)

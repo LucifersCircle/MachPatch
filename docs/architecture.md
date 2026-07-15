@@ -26,8 +26,9 @@ MachPatchVerifier -> MachPatchAnalyzer + MachPatchCore
 MachPatchPackager -> MachPatchBuilder + MachPatchVerifier + MachPatchCore
 ```
 
-The CLI depends directly on `MachPatchAnalyzer` and `MachPatchCore`; later commands will add the
-remaining feature modules as their APIs become available.
+The CLI currently depends directly on `MachPatchAnalyzer`, `MachPatchBuilder`, `MachPatchCore`,
+and `MachPatchGenerator`. Later verification and packaging commands will add their feature
+modules as those APIs become available.
 
 ## Input resolution
 
@@ -129,6 +130,24 @@ methods, and the same lookup on `object_getClass(cls)` for class methods. State 
 pending, installed, or permanently failed. The constructor tries once immediately, then performs
 bounded main-queue retries after 1, 3, and 8 seconds.
 
+## Dylib building
+
+`MachPatchBuilder` discovers the active developer directory, Clang, and iPhoneOS SDK through
+direct `xcode-select` and `xcrun` process invocations. Discovery records the Xcode, compiler, and
+SDK versions. Compilation then launches the resolved Clang executable directly with an argument
+array; user-controlled paths are never interpolated into a shell command.
+
+Milestone 6 resolves only ordinary arm64 builds. It checks the project architecture boundary,
+writes generated source atomically, removes stale regular dylib/build-record outputs, and invokes
+Clang with the configured deployment target and ARC mode. The output install name is always
+`@rpath/<outputName>.dylib`. Successful builds persist `MachPatchBuild.json` with the exact
+invocation and captured diagnostics. Failed compilation removes partial output. Existing symbolic
+link destinations and directory collisions are refused.
+
+The builder intentionally does not guess arm64e support. CPU-subtype matching, toolchain
+capability probes, arm64e output validation, and universal output are owned by the next
+architecture-resolution milestone.
+
 ## Design constraints
 
 - Report unknown architecture and ABI values explicitly; never silently guess.
@@ -153,3 +172,5 @@ bounded main-queue retries after 1, 3, and 8 seconds.
    structurally or against a current target.
 6. Generate deterministic, snapshot-tested native Objective-C runtime patch source with bounded
    late-class retries.
+7. Discover the selected Xcode/iPhoneOS toolchain and build clean ordinary arm64 dylibs with
+   recorded commands and diagnostics.

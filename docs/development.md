@@ -100,3 +100,29 @@ The test suite compiles a project covering every version 1 action and all suppor
 types with host Clang warnings treated as errors. It also compares the example against a checked-in
 source snapshot and verifies symlink-resistant atomic output behavior. The iPhoneOS syntax command
 above is the milestone acceptance check; producing a linked dylib belongs to the builder milestone.
+
+## arm64 builder acceptance checks
+
+```bash
+swift build
+swift test
+.build/debug/machpatch build Examples/ExamplePatch.json \
+  --output "/tmp/MachPatch Builder Acceptance"
+.build/debug/machpatch inspect \
+  "/tmp/MachPatch Builder Acceptance/ExamplePatch.dylib" --json
+xcrun lipo -archs "/tmp/MachPatch Builder Acceptance/ExamplePatch.dylib"
+xcrun otool -D "/tmp/MachPatch Builder Acceptance/ExamplePatch.dylib"
+xcrun otool -L "/tmp/MachPatch Builder Acceptance/ExamplePatch.dylib"
+```
+
+The native report and Apple tools must agree that the output is a single ordinary arm64
+`dynamicLibrary` for `iPhoneOS`, uses the project deployment target, and has the install name
+`@rpath/ExamplePatch.dylib`. Dependencies must be Apple system frameworks/libraries only; no
+Substrate, ElleKit, libhooker, or jailbreak-bootstrap path may appear.
+
+Run the same command twice to exercise clean rebuilding. `MachPatchBuild.json` must contain the
+selected developer directory, Xcode/Clang/SDK versions, exact compiler argument array, captured
+stdout/stderr, termination status, and duration. The unit suite simulates compiler failure and
+requires diagnostics to surface while neither a stale nor partial dylib remains. arm64e projects
+stay blocked until the architecture resolver validates toolchain capability and output CPU
+subtype.

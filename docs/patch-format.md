@@ -109,3 +109,18 @@ before returning its typed replacement.
 
 Generated installation checks the complete raw encoding with `strcmp` before modifying a method.
 An encoding mismatch is permanent. Missing classes or methods remain pending for bounded retries.
+
+## arm64 build output
+
+```bash
+machpatch build patch.json --output Build
+```
+
+The version 1 `build.minimumIOSVersion`, `build.outputName`, and `build.enableARC` values directly
+control Clang's device deployment target, output filename, and ARC flag. The builder appends
+`.dylib` to `outputName` and sets the install name to `@rpath/<outputName>.dylib`.
+
+For the ordinary-arm64 milestone, `automatic` and `arm64` are accepted only when the recorded
+target slice is `arm64`. `arm64e` is rejected until architecture/toolchain capability resolution
+is available. Successful output includes the generated source, dylib, and a JSON build record
+containing the exact compiler invocation, diagnostics, and selected Apple toolchain.

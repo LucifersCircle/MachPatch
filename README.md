@@ -146,6 +146,25 @@ function. Class methods are installed on the metaclass. Actions that preserve be
 typed original IMP; direct-return actions do not. Missing classes are retried on the main queue at
 1, 3, and 8 seconds before being marked failed.
 
+## Build an arm64 dylib
+
+Build the generated source with the active Xcode iPhoneOS toolchain:
+
+```bash
+.build/debug/machpatch build Examples/ExamplePatch.json --output "Build Output"
+```
+
+The command writes `MachPatchGenerated.m`, the configured `<outputName>.dylib`, and
+`MachPatchBuild.json`. The JSON build record captures the selected developer directory, Xcode and
+Clang versions, iPhoneOS SDK path/version, exact compiler executable and argument array, standard
+output/error, exit status, duration, deployment target, and `@rpath` install name.
+
+Milestone 6 accepts `automatic` or explicit `arm64` mode only when the project targets an ordinary
+arm64 slice. It deliberately rejects arm64e instead of relabeling it; toolchain capability probing
+and arm64e resolution belong to the next milestone. Rebuilding the same output removes stale dylib
+and build-record files first, and compiler failures leave no partial product. Clang is launched
+directly without a shell, so paths containing spaces remain single arguments.
+
 ## Development tools
 
 The repository includes configuration for `swift-format` and SwiftLint. When those tools are
@@ -165,6 +184,7 @@ and implementation constraints.
 ## Project status
 
 Safe input resolution, native thin/fat Mach-O inspection, normalized Objective-C metadata
-extraction, patch schema/type validation, and native Objective-C source generation are
-implemented. The arm64 dylib builder is the next command-line milestone; the macOS interface
-remains deferred until the complete CLI pipeline is reliable.
+extraction, patch schema/type validation, native Objective-C source generation, and ordinary
+arm64 iPhoneOS dylib building are implemented. Architecture resolution and validated arm64e
+support are the next command-line milestone; the macOS interface remains deferred until the
+complete CLI pipeline is reliable.
