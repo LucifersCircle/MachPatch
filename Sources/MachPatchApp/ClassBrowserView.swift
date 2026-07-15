@@ -554,6 +554,24 @@ private struct PatchEditorView: View {
             .foregroundStyle(.green)
         }
 
+        Divider()
+
+        AdvancedPatchEditorView(
+            patch: patch,
+            signature: signature,
+            updatePatch: model.updatePatch
+        )
+
+        let patchIssues =
+            model.projectValidationReport?.errors.filter { $0.patchID == patch.id }
+            ?? []
+        ForEach(Array(patchIssues.enumerated()), id: \.offset) { _, issue in
+            Label(issue.message, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+
         Text("Patch ID \(patch.id)")
             .font(.caption2.monospaced())
             .foregroundStyle(.tertiary)
@@ -598,6 +616,11 @@ private struct PatchEditorView: View {
             )
             actionExplanation(
                 "The original method is not called; this Objective-C string is returned.")
+        case .returnObject(let value):
+            objectValueEditor(value, patch: patch)
+            actionExplanation(
+                "The original method is not called; MachPatch constructs and returns this Foundation object."
+            )
         case .callOriginalAndReplace(let replacement):
             replacementEditor(for: replacement, patch: patch)
             actionExplanation(
@@ -620,6 +643,72 @@ private struct PatchEditorView: View {
         case .callOriginal:
             actionExplanation(
                 "Calls the original method without logging or changing its behavior. This is useful as a safe baseline patch."
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func objectValueEditor(_ value: PatchObjectValue, patch: MethodPatch) -> some View {
+        Picker(
+            "Object Type",
+            selection: Binding(
+                get: { value.kind.rawValue },
+                set: { rawValue in
+                    guard let kind = PatchObjectValueKind(rawValue: rawValue) else { return }
+                    model.updatePatch(
+                        patch.replacing(action: .returnObject(defaultObject(for: kind))))
+                }
+            )
+        ) {
+            ForEach(PatchObjectValueKind.allCases, id: \.rawValue) { kind in
+                Text(kind.displayName).tag(kind.rawValue)
+            }
+        }
+
+        switch value {
+        case .numberBoolean(let result):
+            booleanPicker(
+                "Number Value",
+                value: objectBinding(patch: patch, value: result) { .numberBoolean($0) }
+            )
+        case .numberSignedInteger(let result):
+            TextField(
+                "Number Value",
+                value: objectBinding(patch: patch, value: result) { .numberSignedInteger($0) },
+                format: .number.grouping(.never)
+            )
+        case .numberUnsignedInteger(let result):
+            TextField(
+                "Number Value",
+                value: objectBinding(patch: patch, value: result) { .numberUnsignedInteger($0) },
+                format: .number.grouping(.never)
+            )
+        case .arrayOfStrings(let values):
+            Text("One array item per line")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            TextEditor(
+                text: objectBinding(patch: patch, value: values.joined(separator: "\n")) {
+                    .arrayOfStrings($0.components(separatedBy: "\n"))
+                }
+            )
+            .font(.body.monospaced())
+            .frame(minHeight: 80)
+        case .dictionaryOfStrings(let values):
+            Text("One key=value entry per line")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            TextEditor(
+                text: objectBinding(patch: patch, value: dictionaryText(values)) {
+                    .dictionaryOfStrings(dictionaryValue($0))
+                }
+            )
+            .font(.body.monospaced())
+            .frame(minHeight: 80)
+        case .url(let result):
+            TextField(
+                "URL",
+                text: objectBinding(patch: patch, value: result) { .url($0) }
             )
         }
     }
@@ -699,6 +788,42 @@ private struct PatchEditorView: View {
         )
     }
 
+    private func objectBinding<Value>(
+        patch: MethodPatch,
+        value: Value,
+        makeObject: @escaping (Value) -> PatchObjectValue
+    ) -> Binding<Value> {
+        Binding(
+            get: { value },
+            set: { model.updatePatch(patch.replacing(action: .returnObject(makeObject($0)))) }
+        )
+    }
+
+    private func defaultObject(for kind: PatchObjectValueKind) -> PatchObjectValue {
+        switch kind {
+        case .numberBoolean: .numberBoolean(false)
+        case .numberSignedInteger: .numberSignedInteger(0)
+        case .numberUnsignedInteger: .numberUnsignedInteger(0)
+        case .arrayOfStrings: .arrayOfStrings([])
+        case .dictionaryOfStrings: .dictionaryOfStrings([:])
+        case .url: .url("https://example.com")
+        }
+    }
+
+    private func dictionaryText(_ values: [String: String]) -> String {
+        values.keys.sorted().map { "\($0)=\(values[$0] ?? "")" }.joined(separator: "\n")
+    }
+
+    private func dictionaryValue(_ text: String) -> [String: String] {
+        text.split(separator: "\n", omittingEmptySubsequences: true).reduce(into: [:]) {
+            result, line in
+            let components = line.split(
+                separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            guard let key = components.first, !key.isEmpty else { return }
+            result[String(key)] = components.count == 2 ? String(components[1]) : ""
+        }
+    }
+
     private var allowedActions: [PatchActionKind] {
         PatchActionCompatibility.allowedActions(for: signature)
     }
@@ -716,6 +841,7 @@ extension PatchActionKind {
         case .returnUnsignedInteger: "Return Unsigned Integer"
         case .returnNil: "Return Nil"
         case .returnString: "Return String"
+        case .returnObject: "Return Foundation Object"
         case .logInvocation: "Log Invocation"
         case .logArguments: "Log Arguments"
         case .logOriginalReturnValue: "Log Original Return Value"
@@ -732,11 +858,25 @@ extension PatchActionKind {
             "Return a constant unsigned integer without calling the original."
         case .returnNil: "Return nil without calling the original."
         case .returnString: "Return a constant Objective-C string without calling the original."
+        case .returnObject: "Construct and return an NSNumber, collection, or NSURL."
         case .logInvocation: "Log the class and selector, then call the original unchanged."
         case .logArguments: "Log supported arguments, then call the original unchanged."
         case .logOriginalReturnValue: "Call the original, log its result, and return it unchanged."
         case .callOriginal: "Call the original without logging or changing its result."
         case .callOriginalAndReplace: "Call the original, then discard and replace its result."
+        }
+    }
+}
+
+extension PatchObjectValueKind {
+    var displayName: String {
+        switch self {
+        case .numberBoolean: "NSNumber (Boolean)"
+        case .numberSignedInteger: "NSNumber (Signed Integer)"
+        case .numberUnsignedInteger: "NSNumber (Unsigned Integer)"
+        case .arrayOfStrings: "NSArray of Strings"
+        case .dictionaryOfStrings: "NSDictionary of Strings"
+        case .url: "NSURL"
         }
     }
 }

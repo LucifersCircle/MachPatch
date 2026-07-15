@@ -51,6 +51,13 @@ public enum PatchProjectValidationCode: String, Codable, Equatable, Sendable {
     case unsupportedReturnType
     case unsupportedArgumentType
     case incompatibleAction
+    case invalidArgumentIndex
+    case duplicateArgumentReplacement
+    case incompatibleArgumentReplacement
+    case invalidCondition
+    case invalidEffect
+    case afterEffectRequiresOriginal
+    case invocationCounterRequired
     case targetNotAnalyzed
     case targetHashMismatch
     case targetExecutableNameMismatch
@@ -213,7 +220,180 @@ public enum PatchProjectValidator {
                 issue(.incompatibleAction, incompatibility, patchID: patch.id)
             )
         }
+        if let advanced = patch.advanced {
+            errors.append(
+                contentsOf: validate(
+                    advanced,
+                    primaryAction: patch.action,
+                    signature: signature,
+                    patchID: patch.id
+                )
+            )
+        }
         return errors
+    }
+
+    private static func validate(
+        _ advanced: PatchAdvancedConfiguration,
+        primaryAction: PatchAction,
+        signature: ObjectiveCMethodSignature,
+        patchID: String
+    ) -> [PatchProjectValidationIssue] {
+        var errors: [PatchProjectValidationIssue] = []
+
+        if !advanced.argumentReplacements.isEmpty, !primaryAction.callsOriginal {
+            errors.append(
+                issue(
+                    .incompatibleArgumentReplacement,
+                    "Argument replacement requires a primary action that calls the original method.",
+                    patchID: patchID
+                )
+            )
+        }
+
+        var replacedIndices: Set<Int> = []
+        for replacement in advanced.argumentReplacements {
+            guard signature.explicitArguments.indices.contains(replacement.argumentIndex) else {
+                errors.append(
+                    issue(
+                        .invalidArgumentIndex,
+                        "Argument replacement index \(replacement.argumentIndex) is outside this method's \(signature.explicitArguments.count) explicit arguments.",
+                        patchID: patchID
+                    )
+                )
+                continue
+            }
+            if !replacedIndices.insert(replacement.argumentIndex).inserted {
+                errors.append(
+                    issue(
+                        .duplicateArgumentReplacement,
+                        "Argument \(replacement.argumentIndex + 1) has more than one replacement.",
+                        patchID: patchID
+                    )
+                )
+            }
+            let argument = signature.explicitArguments[replacement.argumentIndex]
+            if let message = PatchActionCompatibility.valueIncompatibility(
+                replacement.value,
+                type: argument,
+                context: "Argument \(replacement.argumentIndex + 1) replacement"
+            ) {
+                errors.append(
+                    issue(.incompatibleArgumentReplacement, message, patchID: patchID)
+                )
+            }
+        }
+
+        for effect in advanced.beforeEffects + advanced.afterEffects {
+            if let message = effectValidationError(effect) {
+                errors.append(issue(.invalidEffect, message, patchID: patchID))
+            }
+        }
+        if !advanced.afterEffects.isEmpty, !primaryAction.callsOriginal {
+            errors.append(
+                issue(
+                    .afterEffectRequiresOriginal,
+                    "After-original effects require a primary action that calls the original method.",
+                    patchID: patchID
+                )
+            )
+        }
+
+        if let conditionalReturn = advanced.conditionalReturn {
+            if signature.returnType.kind == .void {
+                errors.append(
+                    issue(
+                        .invalidCondition,
+                        "Conditional return replacement requires a non-void method.",
+                        patchID: patchID
+                    )
+                )
+            } else if let message = PatchActionCompatibility.returnValueIncompatibility(
+                conditionalReturn.replacement,
+                kind: signature.returnType.kind
+            ) {
+                errors.append(issue(.invalidCondition, message, patchID: patchID))
+            }
+
+            switch conditionalReturn.condition.source {
+            case .argument(let index):
+                guard signature.explicitArguments.indices.contains(index) else {
+                    errors.append(
+                        issue(
+                            .invalidArgumentIndex,
+                            "Conditional source argument index \(index) is outside this method's \(signature.explicitArguments.count) explicit arguments.",
+                            patchID: patchID
+                        )
+                    )
+                    break
+                }
+                let argument = signature.explicitArguments[index]
+                if let message = PatchActionCompatibility.conditionIncompatibility(
+                    conditionalReturn.condition,
+                    sourceType: argument
+                ) {
+                    errors.append(issue(.invalidCondition, message, patchID: patchID))
+                }
+            case .invocationCount:
+                if advanced.invocationCounter == nil {
+                    errors.append(
+                        issue(
+                            .invocationCounterRequired,
+                            "An invocation-count condition requires the runtime invocation counter.",
+                            patchID: patchID
+                        )
+                    )
+                }
+                let countType = ObjectiveCType(
+                    encoding: "Q",
+                    kind: .unsignedLongLong,
+                    qualifiers: [],
+                    annotation: nil
+                )
+                if let message = PatchActionCompatibility.conditionIncompatibility(
+                    conditionalReturn.condition,
+                    sourceType: countType
+                ) {
+                    errors.append(issue(.invalidCondition, message, patchID: patchID))
+                }
+            }
+        }
+
+        return errors
+    }
+
+    private static func effectValidationError(_ effect: PatchEffect) -> String? {
+        switch effect {
+        case .showAlert(let alert):
+            if alert.title.utf8.count > 512 {
+                return "Alert titles must not exceed 512 UTF-8 bytes."
+            }
+            if alert.message.utf8.count > 4_096 {
+                return "Alert messages must not exceed 4096 UTF-8 bytes."
+            }
+            if isBlank(alert.buttonTitle) || alert.buttonTitle.utf8.count > 128 {
+                return "Alert button titles must contain 1 through 128 UTF-8 bytes."
+            }
+            return nil
+        case .customObjectiveC(let custom):
+            if isBlank(custom.source) {
+                return "Custom Objective-C code must not be empty."
+            }
+            if custom.source.utf8.count > PatchCustomObjectiveC.maximumUTF8ByteCount {
+                return
+                    "Custom Objective-C code exceeds the \(PatchCustomObjectiveC.maximumUTF8ByteCount)-byte limit."
+            }
+            if custom.source.unicodeScalars.contains(where: { $0.value == 0 }) {
+                return "Custom Objective-C code must not contain NUL characters."
+            }
+            if custom.source.split(separator: "\n", omittingEmptySubsequences: false).contains(
+                where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("#") }
+            ) {
+                return
+                    "Custom Objective-C snippets are function bodies and cannot contain preprocessor directives."
+            }
+            return nil
+        }
     }
 
     private static func validate(
@@ -340,6 +520,7 @@ public enum PatchActionCompatibility {
             actions.append(contentsOf: [
                 .returnNil,
                 .returnString,
+                .returnObject,
                 .logOriginalReturnValue,
                 .callOriginalAndReplace,
             ])
@@ -374,6 +555,11 @@ public enum PatchActionCompatibility {
             return unsignedIntegerRangeError(value: value, kind: signature.returnType.kind)
         case .callOriginalAndReplace(let replacement):
             return replacementError(replacement, kind: signature.returnType.kind)
+        case .returnObject(let object):
+            guard signature.returnType.kind == .object else {
+                return "Object construction requires an Objective-C object return type."
+            }
+            return objectValueError(object)
         default:
             return nil
         }
@@ -397,6 +583,66 @@ public enum PatchActionCompatibility {
             && signature.explicitArguments.allSatisfy { isSupportedArgumentType($0.kind) }
     }
 
+    static func returnValueIncompatibility(
+        _ replacement: PatchReturnValue,
+        kind: ObjectiveCTypeKind
+    ) -> String? {
+        replacementError(replacement, kind: kind)
+    }
+
+    static func valueIncompatibility(
+        _ value: PatchValue,
+        type: ObjectiveCType,
+        context: String
+    ) -> String? {
+        let kind = type.kind
+        switch value {
+        case .boolean:
+            return kind == .boolean ? nil : "\(context) requires a BOOL value."
+        case .signedInteger(let value):
+            guard kind.isSignedInteger else { return "\(context) requires a signed integer value." }
+            return integerRangeError(value: value, kind: kind)
+        case .unsignedInteger(let value):
+            guard kind.isUnsignedInteger else {
+                return "\(context) requires an unsigned integer value."
+            }
+            return unsignedIntegerRangeError(value: value, kind: kind)
+        case .nilValue:
+            return kind == .object || kind == .classObject
+                ? nil : "\(context) can use nil only for object or Class values."
+        case .string:
+            return kind == .object ? nil : "\(context) can use a string only for object values."
+        case .selector(let selector):
+            guard kind == .selector else { return "\(context) requires a selector value." }
+            return isRuntimeName(selector) ? nil : "\(context) contains an invalid selector name."
+        case .classNamed(let className):
+            guard kind == .classObject else { return "\(context) requires a Class value." }
+            return isRuntimeName(className) ? nil : "\(context) contains an invalid class name."
+        }
+    }
+
+    static func conditionIncompatibility(
+        _ condition: PatchCondition,
+        sourceType: ObjectiveCType
+    ) -> String? {
+        if let message = valueIncompatibility(
+            condition.value,
+            type: sourceType,
+            context: "Conditional comparison"
+        ) {
+            return message
+        }
+        let supportsOrdering =
+            sourceType.kind.isSignedInteger || sourceType.kind.isUnsignedInteger
+        switch condition.comparison {
+        case .equal, .notEqual:
+            return nil
+        case .lessThan, .lessThanOrEqual, .greaterThan, .greaterThanOrEqual:
+            return supportsOrdering
+                ? nil : "Ordered comparisons require a signed or unsigned integer source."
+        }
+    }
+
     private static func replacementError(
         _ replacement: PatchReturnValue,
         kind: ObjectiveCTypeKind
@@ -418,6 +664,22 @@ public enum PatchActionCompatibility {
         case .string:
             return kind == .object ? nil : replacementMismatch(replacement, kind: kind)
         }
+    }
+
+    private static func objectValueError(_ value: PatchObjectValue) -> String? {
+        switch value {
+        case .url(let value):
+            return value.isEmpty || URL(string: value) == nil
+                ? "URL object construction requires a valid, non-empty URL string." : nil
+        case .numberBoolean, .numberSignedInteger, .numberUnsignedInteger, .arrayOfStrings,
+            .dictionaryOfStrings:
+            return nil
+        }
+    }
+
+    private static func isRuntimeName(_ value: String) -> Bool {
+        !value.isEmpty && !value.contains(where: \.isWhitespace)
+            && !value.unicodeScalars.contains { $0.value < 0x20 || $0.value == 0x7F }
     }
 
     private static func replacementMismatch(

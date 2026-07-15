@@ -146,6 +146,12 @@ function. Class methods are installed on the metaclass. Actions that preserve be
 typed original IMP; direct-return actions do not. Missing classes are retried on the main queue at
 1, 3, and 8 seconds before being marked failed.
 
+The app's advanced patch editor can compose typed argument replacement, conditional results,
+thread-safe invocation counters, before/after alert presets, and expert Objective-C snippets around
+the primary action. It can also construct common Foundation object returns such as `NSNumber`,
+string arrays/dictionaries, and `NSURL`. Every option is validated against the decoded method
+signature before source generation or building.
+
 ## Build a device dylib
 
 Inspect a target's device slices, then build with the active Xcode iPhoneOS toolchain:

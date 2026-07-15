@@ -179,6 +179,8 @@ enum PatchActionEditorPolicy {
             return .returnNil
         case .returnString:
             return .returnString("")
+        case .returnObject:
+            return .returnObject(.numberBoolean(false))
         case .logInvocation:
             return .logInvocation
         case .logArguments:
@@ -217,6 +219,8 @@ enum PatchActionEditorPolicy {
             return "Requires an object or Class return; this method returns \(returnType)."
         case .returnString:
             return "Requires an Objective-C object return; this method returns \(returnType)."
+        case .returnObject:
+            return "Requires an Objective-C object return; this method returns \(returnType)."
         case .logOriginalReturnValue, .callOriginalAndReplace:
             return "Requires a supported non-void return; this method returns \(returnType)."
         case .logInvocation, .logArguments, .callOriginal:
@@ -251,7 +255,21 @@ extension MethodPatch {
             selector: selector,
             methodKind: methodKind,
             expectedTypeEncoding: expectedTypeEncoding,
-            action: action ?? self.action
+            action: action ?? self.action,
+            advanced: advanced
+        )
+    }
+
+    func replacingAdvanced(_ advanced: PatchAdvancedConfiguration?) -> MethodPatch {
+        MethodPatch(
+            id: id,
+            enabled: enabled,
+            className: className,
+            selector: selector,
+            methodKind: methodKind,
+            expectedTypeEncoding: expectedTypeEncoding,
+            action: action,
+            advanced: advanced?.isEmpty == true ? nil : advanced
         )
     }
 }

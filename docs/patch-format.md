@@ -33,6 +33,10 @@ Actions use a `kind` discriminator. Value-producing actions include a JSON `valu
 { "kind": "returnSignedInteger", "value": -42 }
 { "kind": "returnUnsignedInteger", "value": 42 }
 { "kind": "returnString", "value": "Fixture" }
+{
+  "kind": "returnObject",
+  "object": { "kind": "arrayOfStrings", "value": ["one", "two"] }
+}
 ```
 
 Actions without a direct value are:
@@ -55,6 +59,60 @@ Calling the original implementation and replacing its result uses a typed replac
 ```
 
 Replacement kinds are `boolean`, `signedInteger`, `unsignedInteger`, `nil`, and `string`.
+
+Foundation object construction supports Boolean, signed, and unsigned `NSNumber` values,
+string-only arrays and dictionaries, and `NSURL` values. It is available only for Objective-C
+object returns.
+
+## Advanced behavior
+
+An optional `advanced` object composes behavior around the primary action. It can contain:
+
+- typed `argumentReplacements`, applied before calling the original implementation;
+- ordered `beforeEffects` and `afterEffects` containing alert presets or custom Objective-C;
+- one `conditionalReturn` based on an explicit argument or the invocation count; and
+- a thread-safe `invocationCounter`, with optional per-invocation logging.
+
+For example:
+
+```json
+{
+  "argumentReplacements": [
+    { "argumentIndex": 0, "value": { "kind": "boolean", "value": true } }
+  ],
+  "beforeEffects": [
+    {
+      "kind": "showAlert",
+      "alert": {
+        "title": "MachPatch",
+        "message": "Method invoked",
+        "buttonTitle": "OK"
+      }
+    }
+  ],
+  "afterEffects": [],
+  "conditionalReturn": {
+    "condition": {
+      "source": { "kind": "invocationCount" },
+      "comparison": "greaterThan",
+      "value": { "kind": "unsignedInteger", "value": 3 }
+    },
+    "replacement": { "kind": "boolean", "value": false }
+  },
+  "invocationCounter": { "logEachInvocation": false }
+}
+```
+
+Argument values and comparisons are validated against the decoded ABI type. After-effects and
+argument replacement require a primary action that calls the original implementation. Invocation
+count conditions require the counter. Alert text is size-limited and presented asynchronously on
+the main queue.
+
+Custom Objective-C is expert mode. Snippets are emitted inside the generated replacement function,
+where `self`, `_cmd`, and `argument0` through `argumentN` are in scope. Non-void after-effects also
+receive `originalResult`. Snippets cannot contain preprocessor directives and are capped at 16 KiB;
+the normal Xcode build diagnostics report syntax or type errors. MachPatch can validate the method
+ABI and compile the snippet, but it cannot guarantee that arbitrary custom code is runtime-safe.
 
 ## Type safety
 
@@ -106,6 +164,10 @@ Direct return actions replace behavior without storing the previous IMP. Logging
 pointer. `logInvocation` and `logArguments` call the original unchanged;
 `logOriginalReturnValue` calls, logs, and returns it. `callOriginalAndReplace` calls the original
 before returning its typed replacement.
+
+Advanced effects are emitted in deterministic project order. Counters use atomic increments.
+Conditional returns run after before-effects and before argument replacement. Alerts add UIKit to
+the generated source; ordinary patches remain Foundation/runtime-only.
 
 Generated installation checks the complete raw encoding with `strcmp` before modifying a method.
 An encoding mismatch is permanent. Missing classes or methods remain pending for bounded retries.

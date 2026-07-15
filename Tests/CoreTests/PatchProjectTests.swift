@@ -43,6 +43,12 @@ final class PatchProjectTests: XCTestCase {
             .returnUnsignedInteger(42),
             .returnNil,
             .returnString("Fixture"),
+            .returnObject(.numberBoolean(true)),
+            .returnObject(.numberSignedInteger(-42)),
+            .returnObject(.numberUnsignedInteger(42)),
+            .returnObject(.arrayOfStrings(["one", "two"])),
+            .returnObject(.dictionaryOfStrings(["key": "value"])),
+            .returnObject(.url("https://example.com/path")),
             .logInvocation,
             .logArguments,
             .logOriginalReturnValue,
@@ -58,6 +64,98 @@ final class PatchProjectTests: XCTestCase {
             let project = makeProject(action: action)
             XCTAssertEqual(try PatchProjectCodec.decode(PatchProjectCodec.encode(project)), project)
         }
+    }
+
+    func testAdvancedBehaviorRoundTripsAndValidates() throws {
+        let advanced = PatchAdvancedConfiguration(
+            argumentReplacements: [
+                PatchArgumentReplacement(argumentIndex: 0, value: .boolean(true)),
+                PatchArgumentReplacement(argumentIndex: 1, value: .string("replacement")),
+            ],
+            beforeEffects: [
+                .showAlert(PatchAlert(title: "MachPatch", message: "Before", buttonTitle: "OK")),
+                .customObjectiveC(PatchCustomObjectiveC(source: "NSLog(@\"before\");")),
+            ],
+            afterEffects: [
+                .customObjectiveC(PatchCustomObjectiveC(source: "(void)originalResult;"))
+            ],
+            conditionalReturn: PatchConditionalReturn(
+                condition: PatchCondition(
+                    source: .argument(0),
+                    comparison: .equal,
+                    value: .boolean(false)
+                ),
+                replacement: .boolean(true)
+            ),
+            invocationCounter: PatchInvocationCounter(logEachInvocation: false)
+        )
+        let patch = makePatch(
+            selector: "featureFor:object:",
+            encoding: "B32@0:8B16@24",
+            action: .callOriginal,
+            advanced: advanced
+        )
+        let project = makeProject(patches: [patch])
+
+        XCTAssertTrue(PatchProjectValidator.validate(project).isValid)
+        XCTAssertEqual(try PatchProjectCodec.decode(PatchProjectCodec.encode(project)), project)
+    }
+
+    func testAdvancedValidationBlocksUnsafeCombinations() {
+        let advanced = PatchAdvancedConfiguration(
+            argumentReplacements: [
+                PatchArgumentReplacement(argumentIndex: 0, value: .string("wrong")),
+                PatchArgumentReplacement(argumentIndex: 0, value: .boolean(true)),
+            ],
+            beforeEffects: [
+                .customObjectiveC(PatchCustomObjectiveC(source: "#import <UIKit/UIKit.h>"))
+            ],
+            afterEffects: [
+                .showAlert(PatchAlert(title: "After", message: "Not allowed"))
+            ],
+            conditionalReturn: PatchConditionalReturn(
+                condition: PatchCondition(
+                    source: .invocationCount,
+                    comparison: .greaterThan,
+                    value: .signedInteger(3)
+                ),
+                replacement: .string("wrong")
+            )
+        )
+        let patch = makePatch(
+            selector: "featureFor:",
+            encoding: "B24@0:8B16",
+            action: .returnBoolean(true),
+            advanced: advanced
+        )
+        let report = PatchProjectValidator.validate(makeProject(patches: [patch]))
+
+        for code: PatchProjectValidationCode in [
+            .incompatibleArgumentReplacement,
+            .duplicateArgumentReplacement,
+            .invalidEffect,
+            .afterEffectRequiresOriginal,
+            .invocationCounterRequired,
+            .invalidCondition,
+        ] {
+            XCTAssertTrue(report.errors.contains { $0.code == code }, "Missing \(code)")
+        }
+    }
+
+    func testFoundationObjectReturnIsTypeChecked() {
+        XCTAssertTrue(
+            validate(action: .returnObject(.arrayOfStrings(["one"])), encoding: "@@:").isValid
+        )
+        XCTAssertTrue(
+            validate(action: .returnObject(.numberBoolean(true)), encoding: "B@:").errors.contains {
+                $0.code == .incompatibleAction
+            }
+        )
+        XCTAssertTrue(
+            validate(action: .returnObject(.url("")), encoding: "@@:").errors.contains {
+                $0.code == .incompatibleAction
+            }
+        )
     }
 
     func testCodecRejectsUnsupportedVersionsAndOversizedInput() throws {
@@ -238,7 +336,8 @@ final class PatchProjectTests: XCTestCase {
         id: String = "4F154FAA-1E35-44AA-B014-30EAE65C3F47",
         selector: String = "featureEnabled",
         encoding: String = "B@:",
-        action: PatchAction = .returnBoolean(true)
+        action: PatchAction = .returnBoolean(true),
+        advanced: PatchAdvancedConfiguration? = nil
     ) -> MethodPatch {
         MethodPatch(
             id: id,
@@ -247,7 +346,8 @@ final class PatchProjectTests: XCTestCase {
             selector: selector,
             methodKind: .instance,
             expectedTypeEncoding: encoding,
-            action: action
+            action: action,
+            advanced: advanced
         )
     }
 }

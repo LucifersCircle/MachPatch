@@ -37,6 +37,7 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
         XCTAssertTrue(source.contains("return (unsigned long long)42ULL;"))
         XCTAssertTrue(source.contains("return nil;"))
         XCTAssertTrue(source.contains("return @\"Fixture\";"))
+        XCTAssertTrue(source.contains("return @[@\"one\", @\"two\"];"))
         XCTAssertTrue(source.contains("[MachPatch] Invoked %@"))
         XCTAssertTrue(source.contains("argument 1 = %d"))
         XCTAssertTrue(source.contains("returned %d"))
@@ -50,6 +51,108 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
 
         XCTAssertFalse(source.contains("MPPatch_0_FixtureManager_featureEnabled_Original"))
         XCTAssertTrue(source.contains("MPPatch_8_FixtureManager_reset_Original"))
+    }
+
+    func testGeneratesComposableAdvancedBehaviorDeterministically() throws {
+        let patch = makePatch(
+            index: 20,
+            selector: "featureFor:object:",
+            encoding: "B32@0:8B16@24",
+            action: .callOriginal,
+            advanced: PatchAdvancedConfiguration(
+                argumentReplacements: [
+                    PatchArgumentReplacement(argumentIndex: 0, value: .boolean(true)),
+                    PatchArgumentReplacement(argumentIndex: 1, value: .string("changed")),
+                ],
+                beforeEffects: [
+                    .showAlert(
+                        PatchAlert(title: "MachPatch", message: "Called", buttonTitle: "Dismiss")
+                    ),
+                    .customObjectiveC(PatchCustomObjectiveC(source: "NSLog(@\"before\");")),
+                ],
+                afterEffects: [
+                    .customObjectiveC(
+                        PatchCustomObjectiveC(
+                            source: "NSLog(@\"after = %d\", (int)originalResult);"
+                        )
+                    )
+                ],
+                conditionalReturn: PatchConditionalReturn(
+                    condition: PatchCondition(
+                        source: .invocationCount,
+                        comparison: .greaterThan,
+                        value: .unsignedInteger(3)
+                    ),
+                    replacement: .boolean(false)
+                ),
+                invocationCounter: PatchInvocationCounter(logEachInvocation: false)
+            )
+        )
+
+        let first = try generate(makeProject(patches: [patch]))
+        let second = try generate(makeProject(patches: [patch]))
+
+        XCTAssertEqual(first, second)
+        XCTAssertTrue(first.contains("#import <UIKit/UIKit.h>"))
+        XCTAssertTrue(first.contains("static void MPShowAlert"))
+        XCTAssertTrue(first.contains("__atomic_add_fetch"))
+        XCTAssertTrue(first.contains("if (invocationCount > (unsigned long long)3ULL)"))
+        XCTAssertTrue(first.contains("MPShowAlert(@\"MachPatch\", @\"Called\", @\"Dismiss\")"))
+        XCTAssertTrue(first.contains("argument0 = YES;"))
+        XCTAssertTrue(first.contains("argument1 = @\"changed\";"))
+        XCTAssertTrue(first.contains("NSLog(@\"before\");"))
+        XCTAssertTrue(first.contains("NSLog(@\"after = %d\", (int)originalResult);"))
+    }
+
+    func testAdvancedUIKitSourcePassesDeviceClangWarningsAsErrors() throws {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/xcrun") else {
+            throw XCTSkip("xcrun is unavailable")
+        }
+        let patch = makePatch(
+            index: 21,
+            selector: "setEnabled:",
+            encoding: "v24@0:8B16",
+            action: .callOriginal,
+            advanced: PatchAdvancedConfiguration(
+                argumentReplacements: [
+                    PatchArgumentReplacement(argumentIndex: 0, value: .boolean(true))
+                ],
+                beforeEffects: [
+                    .showAlert(PatchAlert(title: "MachPatch", message: "Enabled")),
+                    .customObjectiveC(PatchCustomObjectiveC(source: "(void)self;")),
+                ],
+                afterEffects: [
+                    .customObjectiveC(PatchCustomObjectiveC(source: "(void)_cmd;"))
+                ],
+                invocationCounter: PatchInvocationCounter(logEachInvocation: false)
+            )
+        )
+        let workspace = FileManager.default.temporaryDirectory.appending(
+            path: "MachPatch-AdvancedCompile-\(UUID().uuidString)",
+            directoryHint: .isDirectory
+        )
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let bundle = try ObjectiveCSourceGenerator().generate(makeProject(patches: [patch]))
+        let sourceURL = try XCTUnwrap(GeneratedSourceWriter.write(bundle, to: workspace).first)
+
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(filePath: "/usr/bin/xcrun")
+        process.arguments = [
+            "--sdk", "iphoneos", "clang",
+            "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror",
+            "-fsyntax-only", "-arch", "arm64", "-miphoneos-version-min=15.0",
+            "-x", "objective-c", sourceURL.path,
+        ]
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+
+        let diagnostics = String(
+            decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self
+        )
+        XCTAssertEqual(process.terminationStatus, 0, diagnostics)
     }
 
     func testGeneratedIdentifiersAreSanitizedScopedAndDeterministic() throws {
@@ -261,7 +364,7 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
             makeProject(
                 patches: allActionPatches() + [
                     makePatch(
-                        index: 12,
+                        index: 13,
                         selector: "a:b:c:d:e:f:g:h:i:j:k:l:m:n:",
                         encoding: "v@:BcCsSiIlLqQ@#:",
                         action: .callOriginal
@@ -362,6 +465,12 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
                 encoding: "#@:",
                 action: .returnNil
             ),
+            makePatch(
+                index: 12,
+                selector: "items",
+                encoding: "@@:",
+                action: .returnObject(.arrayOfStrings(["one", "two"]))
+            ),
         ]
     }
 
@@ -391,7 +500,8 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
         selector: String? = nil,
         methodKind: ObjectiveCMethodKind = .instance,
         encoding: String = "B@:",
-        action: PatchAction = .returnBoolean(true)
+        action: PatchAction = .returnBoolean(true),
+        advanced: PatchAdvancedConfiguration? = nil
     ) -> MethodPatch {
         MethodPatch(
             id: uuid(index + 1),
@@ -400,7 +510,8 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
             selector: selector ?? "method\(index)",
             methodKind: methodKind,
             expectedTypeEncoding: encoding,
-            action: action
+            action: action,
+            advanced: advanced
         )
     }
 

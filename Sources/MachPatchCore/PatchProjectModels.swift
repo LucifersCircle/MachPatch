@@ -88,6 +88,7 @@ public struct MethodPatch: Codable, Equatable, Identifiable, Sendable {
     public let methodKind: ObjectiveCMethodKind
     public let expectedTypeEncoding: String
     public let action: PatchAction
+    public let advanced: PatchAdvancedConfiguration?
 
     public init(
         id: String,
@@ -96,7 +97,8 @@ public struct MethodPatch: Codable, Equatable, Identifiable, Sendable {
         selector: String,
         methodKind: ObjectiveCMethodKind,
         expectedTypeEncoding: String,
-        action: PatchAction
+        action: PatchAction,
+        advanced: PatchAdvancedConfiguration? = nil
     ) {
         self.id = id
         self.enabled = enabled
@@ -105,6 +107,7 @@ public struct MethodPatch: Codable, Equatable, Identifiable, Sendable {
         self.methodKind = methodKind
         self.expectedTypeEncoding = expectedTypeEncoding
         self.action = action
+        self.advanced = advanced
     }
 }
 
@@ -114,6 +117,7 @@ public enum PatchAction: Equatable, Sendable {
     case returnUnsignedInteger(UInt64)
     case returnNil
     case returnString(String)
+    case returnObject(PatchObjectValue)
     case logInvocation
     case logArguments
     case logOriginalReturnValue
@@ -127,11 +131,23 @@ public enum PatchAction: Equatable, Sendable {
         case .returnUnsignedInteger: .returnUnsignedInteger
         case .returnNil: .returnNil
         case .returnString: .returnString
+        case .returnObject: .returnObject
         case .logInvocation: .logInvocation
         case .logArguments: .logArguments
         case .logOriginalReturnValue: .logOriginalReturnValue
         case .callOriginal: .callOriginal
         case .callOriginalAndReplace: .callOriginalAndReplace
+        }
+    }
+
+    public var callsOriginal: Bool {
+        switch self {
+        case .returnBoolean, .returnSignedInteger, .returnUnsignedInteger, .returnNil,
+            .returnString, .returnObject:
+            false
+        case .logInvocation, .logArguments, .logOriginalReturnValue, .callOriginal,
+            .callOriginalAndReplace:
+            true
         }
     }
 }
@@ -142,6 +158,7 @@ public enum PatchActionKind: String, Codable, CaseIterable, Equatable, Sendable 
     case returnUnsignedInteger
     case returnNil
     case returnString
+    case returnObject
     case logInvocation
     case logArguments
     case logOriginalReturnValue
@@ -180,6 +197,7 @@ extension PatchAction: Codable {
         case kind
         case value
         case replacement
+        case object
     }
 
     public init(from decoder: any Decoder) throws {
@@ -196,6 +214,8 @@ extension PatchAction: Codable {
             self = .returnNil
         case .returnString:
             self = .returnString(try container.decode(String.self, forKey: .value))
+        case .returnObject:
+            self = .returnObject(try container.decode(PatchObjectValue.self, forKey: .object))
         case .logInvocation:
             self = .logInvocation
         case .logArguments:
@@ -223,6 +243,8 @@ extension PatchAction: Codable {
             try container.encode(value, forKey: .value)
         case .returnString(let value):
             try container.encode(value, forKey: .value)
+        case .returnObject(let object):
+            try container.encode(object, forKey: .object)
         case .callOriginalAndReplace(let replacement):
             try container.encode(replacement, forKey: .replacement)
         case .returnNil, .logInvocation, .logArguments, .logOriginalReturnValue, .callOriginal:
