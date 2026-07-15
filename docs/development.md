@@ -78,3 +78,25 @@ The target-backed form must select the exact recorded architecture and raw CPU s
 checks the current executable identity, class, selector, instance/class kind, and raw type
 encoding. Identity changes are warnings; an absent slice, class, method, wrong kind, changed
 encoding, or incompatible ABI is an error and returns a nonzero status.
+
+## Source-generation acceptance checks
+
+```bash
+swift build
+swift test
+.build/debug/machpatch generate Examples/ExamplePatch.json --output /tmp/MachPatchGenerated
+xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=15.0 \
+  -fobjc-arc -fblocks -Wall -Wextra -Werror -fsyntax-only -x objective-c \
+  /tmp/MachPatchGenerated/MachPatchGenerated.m
+```
+
+Generation must be byte-stable for the same project and must reject a project that fails schema or
+action validation. Inspect the source to confirm that instance and class methods use the correct
+runtime object, different classes cannot collide after identifier sanitization, exact raw type
+encodings are checked before installation, and only call-through actions retain a typed original
+IMP.
+
+The test suite compiles a project covering every version 1 action and all supported argument ABI
+types with host Clang warnings treated as errors. It also compares the example against a checked-in
+source snapshot and verifies symlink-resistant atomic output behavior. The iPhoneOS syntax command
+above is the milestone acceptance check; producing a linked dylib belongs to the builder milestone.

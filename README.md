@@ -128,6 +128,24 @@ slice, and raw type encoding:
 See [docs/patch-format.md](docs/patch-format.md) for the version 1 schema, supported actions, and
 MVP type rules.
 
+## Generate Objective-C source
+
+Generate a self-contained native runtime patch source file from a valid project:
+
+```bash
+.build/debug/machpatch generate Examples/ExamplePatch.json --output Generated
+```
+
+The command writes `Generated/MachPatchGenerated.m` atomically and prints a JSON summary of the
+created file. Generated source uses Foundation and Apple's Objective-C runtime directly—there are
+no Theos, Logos, Substrate, ElleKit, or jailbreak-path dependencies.
+
+Each enabled patch receives a deterministic, index-scoped C identifier, an ABI-matched
+replacement function, an exact runtime type-encoding guard, and an idempotent installation
+function. Class methods are installed on the metaclass. Actions that preserve behavior store a
+typed original IMP; direct-return actions do not. Missing classes are retried on the main queue at
+1, 3, and 8 seconds before being marked failed.
+
 ## Development tools
 
 The repository includes configuration for `swift-format` and SwiftLint. When those tools are
@@ -147,6 +165,6 @@ and implementation constraints.
 ## Project status
 
 Safe input resolution, native thin/fat Mach-O inspection, normalized Objective-C metadata
-extraction, and patch schema/type validation are implemented. Objective-C source generation is
-the next command-line milestone; the macOS interface remains deferred until the complete CLI
-pipeline is reliable.
+extraction, patch schema/type validation, and native Objective-C source generation are
+implemented. The arm64 dylib builder is the next command-line milestone; the macOS interface
+remains deferred until the complete CLI pipeline is reliable.

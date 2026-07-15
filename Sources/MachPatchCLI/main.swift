@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import MachPatchAnalyzer
 import MachPatchCore
+import MachPatchGenerator
 
 @main
 struct MachPatchCommand {
@@ -20,6 +21,8 @@ struct MachPatchCommand {
                                  List methods declared by an Objective-C class.
           validate-project <project> [--target <path>]
                                  Validate a patch project, optionally against a target.
+          generate <project> --output <directory>
+                                 Generate deterministic Objective-C patch source.
 
         OPTIONS:
           --version             Show the MachPatch version.
@@ -83,6 +86,12 @@ struct MachPatchCommand {
                 projectPath: arguments[1],
                 targetPath: arguments.count == 4 ? arguments[3] : nil
             )
+        case "generate":
+            guard arguments.count == 4, arguments[2] == "--output" else {
+                writeError("Usage: machpatch generate <project.json> --output <directory>\n")
+                exit(EX_USAGE)
+            }
+            generate(projectPath: arguments[1], outputPath: arguments[3])
         default:
             writeError("Unknown command or option: \(arguments[0])\n\n\(help)\n")
             exit(EX_USAGE)
@@ -224,6 +233,25 @@ struct MachPatchCommand {
             try handle.read(upToCount: PatchProjectCodec.maximumProjectBytes + 1) ?? Data()
         return try PatchProjectCodec.decode(data)
     }
+
+    private static func generate(projectPath: String, outputPath: String) {
+        do {
+            let project = try readProject(at: URL(filePath: projectPath))
+            let bundle = try ObjectiveCSourceGenerator().generate(project)
+            let outputDirectory = URL(filePath: outputPath).standardizedFileURL
+            let writtenURLs = try GeneratedSourceWriter.write(bundle, to: outputDirectory)
+            try writeJSON(
+                GenerateOutput(
+                    projectPath: URL(filePath: projectPath).standardizedFileURL.path,
+                    outputDirectory: outputDirectory.path,
+                    files: writtenURLs.map(\.path)
+                )
+            )
+        } catch {
+            writeError("error: \(error.localizedDescription)\n")
+            exit(EXIT_FAILURE)
+        }
+    }
 }
 
 private struct ClassListOutput: Encodable {
@@ -280,4 +308,10 @@ private struct CLIError: Error, LocalizedError {
     }
 
     var errorDescription: String? { message }
+}
+
+private struct GenerateOutput: Encodable {
+    let projectPath: String
+    let outputDirectory: String
+    let files: [String]
 }

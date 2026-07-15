@@ -168,6 +168,33 @@ final class PatchProjectTests: XCTestCase {
         XCTAssertTrue(report.errors.contains { $0.code == .duplicatePatchTarget })
     }
 
+    func testRejectsRuntimeNamesWithWhitespaceOrControlCharacters() {
+        let invalidClass = MethodPatch(
+            id: "4F154FAA-1E35-44AA-B014-30EAE65C3F47",
+            enabled: true,
+            className: "Bad Class",
+            selector: "featureEnabled",
+            methodKind: .instance,
+            expectedTypeEncoding: "B@:",
+            action: .returnBoolean(true)
+        )
+        let invalidSelector = MethodPatch(
+            id: "C415D294-6669-428F-9044-75B1BD91CB20",
+            enabled: true,
+            className: "FixtureManager",
+            selector: "bad\u{0000}selector",
+            methodKind: .instance,
+            expectedTypeEncoding: "B@:",
+            action: .returnBoolean(true)
+        )
+        let report = PatchProjectValidator.validate(
+            makeProject(patches: [invalidClass, invalidSelector])
+        )
+
+        XCTAssertTrue(report.errors.contains { $0.code == .invalidClassName })
+        XCTAssertTrue(report.errors.contains { $0.code == .invalidSelector })
+    }
+
     private func validate(
         action: PatchAction,
         encoding: String,

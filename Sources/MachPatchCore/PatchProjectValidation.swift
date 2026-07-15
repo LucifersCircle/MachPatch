@@ -42,6 +42,7 @@ public enum PatchProjectValidationCode: String, Codable, Equatable, Sendable {
     case duplicatePatchID
     case duplicatePatchTarget
     case emptyClassName
+    case invalidClassName
     case emptySelector
     case invalidSelector
     case emptyTypeEncoding
@@ -150,16 +151,28 @@ public enum PatchProjectValidator {
             errors.append(
                 issue(.emptyClassName, "Class name must not be empty.", patchID: patch.id)
             )
+        } else if containsRuntimeNameControlCharacter(patch.className)
+            || patch.className.contains(where: \.isWhitespace)
+        {
+            errors.append(
+                issue(
+                    .invalidClassName,
+                    "Class name must not contain whitespace or control characters.",
+                    patchID: patch.id
+                )
+            )
         }
         if isBlank(patch.selector) {
             errors.append(
                 issue(.emptySelector, "Selector must not be empty.", patchID: patch.id)
             )
-        } else if patch.selector.contains(where: { $0.isWhitespace || $0.isNewline }) {
+        } else if patch.selector.contains(where: \.isWhitespace)
+            || containsRuntimeNameControlCharacter(patch.selector)
+        {
             errors.append(
                 issue(
                     .invalidSelector,
-                    "Selector must not contain whitespace.",
+                    "Selector must not contain whitespace or control characters.",
                     patchID: patch.id
                 )
             )
@@ -272,6 +285,10 @@ public enum PatchProjectValidator {
 
     private static func isBlank(_ value: String) -> Bool {
         value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private static func containsRuntimeNameControlCharacter(_ value: String) -> Bool {
+        value.unicodeScalars.contains { $0.value < 0x20 || $0.value == 0x7F }
     }
 
     private static func isSHA256(_ value: String) -> Bool {

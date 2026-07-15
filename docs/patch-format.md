@@ -90,3 +90,22 @@ machpatch validate-project patch.json --target /path/to/Target.ipa
 Target-backed validation selects the exact recorded architecture and CPU subtype, then verifies
 the class, selector, method kind, and raw type encoding. Reports are stable JSON. Validation exits
 nonzero when `isValid` is false; retargeting warnings alone do not make the project invalid.
+
+## Source generation
+
+```bash
+machpatch generate patch.json --output Generated
+```
+
+Disabled patches remain in the canonical project but are omitted from generated source. Enabled
+patches retain their original project indices in generated C identifiers, so output is
+deterministic and identifiers cannot collide after sanitization.
+
+Direct return actions replace behavior without storing the previous IMP. Logging actions,
+`callOriginal`, and `callOriginalAndReplace` store and invoke an ABI-matched original function
+pointer. `logInvocation` and `logArguments` call the original unchanged;
+`logOriginalReturnValue` calls, logs, and returns it. `callOriginalAndReplace` calls the original
+before returning its typed replacement.
+
+Generated installation checks the complete raw encoding with `strcmp` before modifying a method.
+An encoding mismatch is permanent. Missing classes or methods remain pending for bounded retries.

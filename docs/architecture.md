@@ -113,6 +113,22 @@ unsupported ABI shapes so validation can reject them explicitly instead of miscl
 `MachPatchAnalyzer` adds target-backed validation by selecting the exact architecture/subtype and
 checking the current class, selector, method kind, and raw encoding.
 
+## Objective-C source generation
+
+`MachPatchGenerator` converts a structurally valid version 1 project into one deterministic
+`MachPatchGenerated.m` file. Generation has no analyzer or filesystem dependency. A separate
+writer performs bounded-path, symlink-resistant, atomic export to the user-selected directory.
+
+For every enabled patch, the generator maps the decoded signature to exact C parameter and return
+types, scopes sanitized identifiers by project index, emits the replacement, and adds a runtime
+installer. Original IMP storage is generated only for actions that call through. Object-returning
+selectors in retained method families receive the appropriate Clang ownership attribute.
+
+Installers use exact `method_getTypeEncoding` comparisons, `class_getInstanceMethod` for instance
+methods, and the same lookup on `object_getClass(cls)` for class methods. State transitions are
+pending, installed, or permanently failed. The constructor tries once immediately, then performs
+bounded main-queue retries after 1, 3, and 8 seconds.
+
 ## Design constraints
 
 - Report unknown architecture and ABI values explicitly; never silently guess.
@@ -135,3 +151,5 @@ checking the current class, selector, method kind, and raw encoding.
    categories behind a replaceable provider boundary.
 5. Round-trip patch schema version 1, decode Objective-C method signatures, and validate actions
    structurally or against a current target.
+6. Generate deterministic, snapshot-tested native Objective-C runtime patch source with bounded
+   late-class retries.
