@@ -4,6 +4,7 @@ import SwiftUI
 
 struct TargetSidebar: View {
     @ObservedObject var model: WorkspaceModel
+    @State private var isBuildWorkspaceHovered = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -13,8 +14,11 @@ struct TargetSidebar: View {
                         model.chooseTarget()
                     } label: {
                         Label("Open Target…", systemImage: "folder.badge.plus")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .contentShape(Rectangle())
                 }
 
                 if case .loaded(let loadedTarget) = model.phase {
@@ -141,18 +145,34 @@ struct TargetSidebar: View {
                     .foregroundStyle(isSelected ? selectedText.opacity(0.82) : .secondary)
                 }
                 Spacer(minLength: 0)
+                Image(systemName: isSelected ? "checkmark" : "chevron.right")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(isSelected ? selectedText : Color.accentColor)
+                    .accessibilityHidden(true)
             }
             .foregroundStyle(isSelected ? selectedText : .primary)
             .padding(.horizontal, 10)
             .padding(.vertical, 9)
             .contentShape(Rectangle())
             .background(
-                isSelected ? Color.accentColor : Color.clear,
+                isSelected
+                    ? Color.accentColor
+                    : Color.accentColor.opacity(isBuildWorkspaceHovered ? 0.16 : 0.08),
                 in: RoundedRectangle(cornerRadius: 8)
             )
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(
+                        Color.accentColor.opacity(
+                            isSelected ? 0 : isBuildWorkspaceHovered ? 0.55 : 0.28
+                        ),
+                        lineWidth: 1
+                    )
+            }
         }
         .buttonStyle(.plain)
         .padding(8)
+        .onHover { isBuildWorkspaceHovered = $0 }
         .help("Open the always-available build, verification, and export workspace.")
         .accessibilityLabel("Build Workspace, \(projectDraft.patches.count) patches")
     }
@@ -250,10 +270,12 @@ struct TargetSidebar: View {
                 Picker("Class Filter", selection: $model.classFilter) {
                     ForEach(ObjectiveCClassFilter.allCases) { filter in
                         Text(filter.rawValue).tag(filter)
+                            .help(filter.helpText)
                     }
                 }
                 .labelsHidden()
                 .padding(.horizontal, 4)
+                .help(model.classFilter.helpText)
             }
 
             Section(

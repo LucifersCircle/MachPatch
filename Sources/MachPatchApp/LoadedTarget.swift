@@ -197,11 +197,33 @@ enum WorkspaceNavigation: Hashable {
     case build
 }
 
-enum ObjectiveCClassFilter: String, CaseIterable, Identifiable {
+enum ObjectiveCClassFilter: String, CaseIterable, Hashable, Identifiable {
     case all = "All Classes"
     case likelyAppDefined = "Likely App-Defined"
+    case likelyThirdPartySDK = "Likely Third-Party SDK"
+    case uikitSubclass = "UIKit Subclasses"
     case objectiveCVisibleSwift = "Objective-C Swift"
     case withProperties = "With Properties"
+    case declaredBySelectedImage = "Declared by Selected Image"
 
     var id: Self { self }
+
+    var helpText: String {
+        switch self {
+        case .all:
+            "Show every class and category-only runtime target in the selected image analysis."
+        case .likelyAppDefined:
+            "Show classes not recognized by MachPatch’s conservative third-party SDK name heuristic."
+        case .likelyThirdPartySDK:
+            "Show classes recognized by MachPatch’s conservative third-party SDK name heuristic."
+        case .uikitSubclass:
+            "Show classes whose recorded superclass chain reaches a UIKit-named class."
+        case .objectiveCVisibleSwift:
+            "Show Swift classes exposed through the Objective-C runtime."
+        case .withProperties:
+            "Show classes and category targets with Objective-C property metadata."
+        case .declaredBySelectedImage:
+            "Show concrete classes declared by the currently selected executable or framework, excluding category-only external targets."
+        }
+    }
 }

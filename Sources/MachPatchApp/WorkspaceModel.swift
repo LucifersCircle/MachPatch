@@ -128,6 +128,9 @@ final class WorkspaceModel: ObservableObject {
     private var analysisCacheRecency: [TargetAnalysisCacheKey] = []
     private var classBrowserTargetsByID: [String: ObjectiveCClassBrowserTarget] = [:]
     private var classBrowserTargetsByName: [String: ObjectiveCClassBrowserTarget] = [:]
+    private var classBrowserTargetsByFilter:
+        [ObjectiveCClassFilter: [ObjectiveCClassBrowserTarget]] = [:]
+    private var classBrowserTargetIDsByFilter: [ObjectiveCClassFilter: Set<String>] = [:]
     private var methodSearchMatchesByClassID: [String: [ObjectiveCCanonicalMethod]] = [:]
     private var isClassBrowserRefreshSuspended = false
 
@@ -1166,16 +1169,25 @@ final class WorkspaceModel: ObservableObject {
         }
     }
 
-    private func matchesFilter(_ objectiveCClass: ObjectiveCClassBrowserTarget) -> Bool {
-        switch classFilter {
+    private func matchesFilter(
+        _ objectiveCClass: ObjectiveCClassBrowserTarget,
+        filter: ObjectiveCClassFilter
+    ) -> Bool {
+        switch filter {
         case .all:
             true
         case .likelyAppDefined:
             objectiveCClass.isLikelyAppDefined
+        case .likelyThirdPartySDK:
+            objectiveCClass.isLikelyThirdPartySDK
+        case .uikitSubclass:
+            objectiveCClass.isUIKitSubclass
         case .objectiveCVisibleSwift:
             objectiveCClass.isObjectiveCVisibleSwift
         case .withProperties:
             !objectiveCClass.properties.isEmpty
+        case .declaredBySelectedImage:
+            objectiveCClass.isDeclaredBySelectedImage
         }
     }
 
@@ -1183,6 +1195,8 @@ final class WorkspaceModel: ObservableObject {
         guard case .loaded(let loadedTarget) = phase else {
             classBrowserTargetsByID = [:]
             classBrowserTargetsByName = [:]
+            classBrowserTargetsByFilter = [:]
+            classBrowserTargetIDsByFilter = [:]
             filteredClasses = []
             methodSearchMatchesByClassID = [:]
             return
@@ -1193,6 +1207,20 @@ final class WorkspaceModel: ObservableObject {
         }
         classBrowserTargetsByName = loadedTarget.classBrowserTargets.reduce(into: [:]) {
             $0[$1.name] = $1
+        }
+        classBrowserTargetsByFilter = Dictionary(
+            uniqueKeysWithValues: ObjectiveCClassFilter.allCases.map { filter in
+                let targets =
+                    filter == .all
+                    ? loadedTarget.classBrowserTargets
+                    : loadedTarget.classBrowserTargets.filter {
+                        matchesFilter($0, filter: filter)
+                    }
+                return (filter, targets)
+            }
+        )
+        classBrowserTargetIDsByFilter = classBrowserTargetsByFilter.mapValues { targets in
+            Set(targets.map(\.id))
         }
         refreshClassBrowserResults()
     }
@@ -1206,16 +1234,23 @@ final class WorkspaceModel: ObservableObject {
         }
 
         let query = classSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidates =
+            classBrowserTargetsByFilter[classFilter] ?? loadedTarget.classBrowserTargets
+        guard !query.isEmpty else {
+            filteredClasses = candidates
+            methodSearchMatchesByClassID = [:]
+            reconcileClassSelection(
+                visibleClassIDs: classBrowserTargetIDsByFilter[classFilter]
+                    ?? Set(candidates.map(\.id))
+            )
+            return
+        }
+
         var results: [ObjectiveCClassBrowserTarget] = []
-        results.reserveCapacity(loadedTarget.classBrowserTargets.count)
+        results.reserveCapacity(candidates.count)
         var methodMatches: [String: [ObjectiveCCanonicalMethod]] = [:]
 
-        for target in loadedTarget.classBrowserTargets where matchesFilter(target) {
-            guard !query.isEmpty else {
-                results.append(target)
-                continue
-            }
-
+        for target in candidates {
             if matchesClassMetadata(target, query: query) {
                 results.append(target)
                 continue
@@ -1242,6 +1277,16 @@ final class WorkspaceModel: ObservableObject {
 
         filteredClasses = results
         methodSearchMatchesByClassID = methodMatches
+        reconcileClassSelection(visibleClassIDs: Set(results.map(\.id)))
+    }
+
+    private func reconcileClassSelection(visibleClassIDs: Set<String>) {
+        guard case .objectiveCClass(let classID) = navigation,
+            !visibleClassIDs.contains(classID)
+        else { return }
+        navigation = nil
+        selectedMethodID = nil
+        methodRevealRequest = nil
     }
 
     private func resetClassBrowserQuery() {

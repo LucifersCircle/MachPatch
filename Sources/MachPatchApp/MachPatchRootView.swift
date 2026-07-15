@@ -92,14 +92,6 @@ struct MachPatchRootView: View {
                     Label("Patch Project", systemImage: "hammer")
                 }
             }
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    model.chooseTarget()
-                } label: {
-                    Label("Open Target", systemImage: "folder.badge.plus")
-                }
-                .keyboardShortcut("o", modifiers: .command)
-            }
         }
         .fileImporter(
             isPresented: $model.isImporterPresented,

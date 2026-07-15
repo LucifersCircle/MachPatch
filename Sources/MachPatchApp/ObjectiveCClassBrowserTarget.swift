@@ -15,7 +15,10 @@ struct ObjectiveCClassBrowserTarget: Equatable, Identifiable {
     let superclassName: String?
     let imageName: String
     let isLikelyAppDefined: Bool
+    let isLikelyThirdPartySDK: Bool
+    let isUIKitSubclass: Bool
     let isObjectiveCVisibleSwift: Bool
+    let isDeclaredBySelectedImage: Bool
     let isCategoryOnly: Bool
     let methods: [ObjectiveCCanonicalMethod]
     let properties: [ObjectiveCPropertyBrowserItem]
@@ -42,6 +45,10 @@ struct ObjectiveCClassBrowserTarget: Equatable, Identifiable {
 enum ObjectiveCClassBrowserCatalog {
     static func targets(for analysis: ObjectiveCAnalysis) -> [ObjectiveCClassBrowserTarget] {
         let metadata = analysis.metadata
+        let classesByName = Dictionary(
+            metadata.classes.map { ($0.name, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
         return ObjectiveCMethodCatalog.ownerClassNames(in: metadata).map { className in
             let objectiveCClass = metadata.classes.first { $0.name == className }
             let categories = metadata.categories.filter { $0.className == className }
@@ -63,7 +70,12 @@ enum ObjectiveCClassBrowserCatalog {
                 superclassName: objectiveCClass?.superclassName,
                 imageName: objectiveCClass?.imageName ?? analysis.image.executableName,
                 isLikelyAppDefined: objectiveCClass?.isLikelyAppDefined ?? false,
+                isLikelyThirdPartySDK: objectiveCClass.map { !$0.isLikelyAppDefined } ?? false,
+                isUIKitSubclass: objectiveCClass.map {
+                    isUIKitSubclass($0, classesByName: classesByName)
+                } ?? false,
                 isObjectiveCVisibleSwift: objectiveCClass?.isObjectiveCVisibleSwift ?? false,
+                isDeclaredBySelectedImage: objectiveCClass != nil,
                 isCategoryOnly: objectiveCClass == nil,
                 methods: ObjectiveCMethodCatalog.methods(
                     forClassNamed: className,
@@ -77,6 +89,21 @@ enum ObjectiveCClassBrowserCatalog {
                 categoryNames: categories.map(\.name).sorted()
             )
         }
+    }
+
+    private static func isUIKitSubclass(
+        _ objectiveCClass: ObjectiveCClass,
+        classesByName: [String: ObjectiveCClass]
+    ) -> Bool {
+        var visited: Set<String> = []
+        var superclassName = objectiveCClass.superclassName
+        while let currentName = superclassName, visited.insert(currentName).inserted {
+            if currentName.hasPrefix("UI") || currentName.hasPrefix("_UI") {
+                return true
+            }
+            superclassName = classesByName[currentName]?.superclassName
+        }
+        return false
     }
 
     private static func propertyOrdering(

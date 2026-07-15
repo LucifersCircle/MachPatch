@@ -183,6 +183,15 @@ final class WorkspaceModelTests: XCTestCase {
         model.classFilter = .likelyAppDefined
         XCTAssertEqual(model.filteredClasses.map(\.name), ["AppController"])
 
+        model.classFilter = .likelyThirdPartySDK
+        XCTAssertEqual(model.filteredClasses.map(\.name), ["SDKClass"])
+
+        model.classFilter = .uikitSubclass
+        XCTAssertEqual(model.filteredClasses.map(\.name), ["AppController"])
+
+        model.classFilter = .declaredBySelectedImage
+        XCTAssertEqual(model.filteredClasses.map(\.name), ["AppController", "SDKClass"])
+
         model.classFilter = .all
         model.classSearch = "sdkMethod"
         XCTAssertEqual(model.filteredClasses.map(\.name), ["SDKClass"])
@@ -199,6 +208,17 @@ final class WorkspaceModelTests: XCTestCase {
 
         model.navigation = .objectiveCClass("class-sdk")
         XCTAssertEqual(model.selectedClass?.name, "SDKClass")
+
+        model.classSearch = ""
+        model.classFilter = .likelyThirdPartySDK
+        XCTAssertEqual(model.navigation, .objectiveCClass("class-sdk"))
+
+        model.classFilter = .uikitSubclass
+        XCTAssertNil(model.navigation)
+        XCTAssertNil(model.selectedClass)
+
+        model.classFilter = .all
+        XCTAssertNil(model.navigation)
     }
 
     func testLargeClassSearchIsIndexedAndReusable() async throws {
@@ -226,7 +246,10 @@ final class WorkspaceModelTests: XCTestCase {
                 superclassName: "NSObject",
                 imageName: "StressFixture",
                 isLikelyAppDefined: true,
+                isLikelyThirdPartySDK: false,
+                isUIKitSubclass: false,
                 isObjectiveCVisibleSwift: false,
+                isDeclaredBySelectedImage: true,
                 isCategoryOnly: false,
                 methods: methods,
                 properties: [],
@@ -1593,7 +1616,7 @@ final class WorkspaceModelTests: XCTestCase {
                     ObjectiveCClass(
                         id: "class-app",
                         name: "AppController",
-                        superclassName: "NSObject",
+                        superclassName: "UIViewController",
                         imageName: "Fixture",
                         isLikelyAppDefined: true,
                         isObjectiveCVisibleSwift: false,
