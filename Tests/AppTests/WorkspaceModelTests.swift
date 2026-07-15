@@ -137,6 +137,84 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertTrue(draft.validationReport.isValid)
     }
 
+    func testBuildWorkspaceRegeneratesDeterministicSourceFromCanonicalProject() async throws {
+        let target = makeLoadedTarget()
+        let analysis = makeAnalysis(for: target)
+        let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
+        let model = WorkspaceModel(loader: SuccessfulLoader(target: loadedTarget))
+
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+
+        guard case .ready(let initialBundle) = model.generatedSourcePreview else {
+            return XCTFail("Expected an initial generated source preview")
+        }
+        let initialSource = try XCTUnwrap(initialBundle.files.first?.contents)
+        XCTAssertFalse(initialSource.contains("featureEnabled"))
+
+        let method = try XCTUnwrap(analysis.metadata.classes.first?.instanceMethods.first)
+        try model.addPatch(className: "AppController", method: method)
+
+        guard case .ready(let patchedBundle) = model.generatedSourcePreview else {
+            return XCTFail("Expected a regenerated source preview")
+        }
+        let patchedSource = try XCTUnwrap(patchedBundle.files.first?.contents)
+        XCTAssertTrue(patchedSource.contains("featureEnabled"))
+
+        model.updateProjectName("Renamed Patch")
+        model.updateOutputName("RenamedOutput")
+        model.updateMinimumIOSVersion("16.0")
+        model.updateARCEnabled(false)
+
+        XCTAssertEqual(model.patchProject?.projectName, "Renamed Patch")
+        XCTAssertEqual(model.patchProject?.build.outputName, "RenamedOutput")
+        XCTAssertEqual(model.patchProject?.build.minimumIOSVersion, "16.0")
+        XCTAssertEqual(model.patchProject?.build.enableARC, false)
+        guard case .ready(let regeneratedBundle) = model.generatedSourcePreview else {
+            return XCTFail("Expected a valid source preview after settings edits")
+        }
+        XCTAssertEqual(regeneratedBundle.files.first?.contents, patchedSource)
+    }
+
+    func testBuildWorkspaceConstrainsArchitectureAndReportsInvalidSettings() async {
+        let target = makeLoadedTarget()
+        let analysis = makeAnalysis(for: target)
+        let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
+        let model = WorkspaceModel(loader: SuccessfulLoader(target: loadedTarget))
+
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+
+        XCTAssertEqual(model.availableArchitectureModes, [.automatic, .arm64, .universal])
+        guard case .resolved(let resolution) = model.architecturePreview else {
+            return XCTFail("Expected automatic architecture resolution")
+        }
+        XCTAssertEqual(resolution.outputArchitecture, .arm64)
+
+        model.updateArchitectureMode(.arm64e)
+        XCTAssertEqual(model.projectDraft?.architectureMode, .automatic)
+
+        model.updateOutputName("invalid/name")
+        XCTAssertEqual(model.projectValidationReport?.errors.map(\.code), [.invalidOutputName])
+        guard case .unavailable = model.generatedSourcePreview else {
+            return XCTFail("Invalid settings must suppress generated source")
+        }
+    }
+
+    func testBuildWorkspaceColumnsRemainWithinAvailableWidth() {
+        for availableWidth: CGFloat in [0, 560, 700, 1_000, 1_600] {
+            let layout = BuildWorkspaceColumnLayout(availableWidth: availableWidth)
+
+            XCTAssertEqual(layout.totalWidth, max(availableWidth, 1), accuracy: 0.001)
+            XCTAssertGreaterThanOrEqual(layout.settingsWidth, 0)
+            XCTAssertGreaterThanOrEqual(layout.sourceWidth, 0)
+        }
+
+        let wideLayout = BuildWorkspaceColumnLayout(availableWidth: 1_600)
+        XCTAssertEqual(wideLayout.settingsWidth, 400)
+        XCTAssertEqual(wideLayout.sourceWidth, 1_199)
+    }
+
     func testPatchActionPolicyIsTypeAwareAndExplainsUnsupportedSignatures() throws {
         let booleanSignature = try ObjectiveCTypeEncodingDecoder.decodeMethodSignature("B16@0:8")
 

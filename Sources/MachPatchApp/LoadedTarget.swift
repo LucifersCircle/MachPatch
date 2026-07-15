@@ -78,6 +78,7 @@ struct PendingProjectImport: Identifiable, Equatable {
 enum WorkspaceNavigation: Hashable {
     case target
     case objectiveCClass(String)
+    case build
 }
 
 enum ObjectiveCClassFilter: String, CaseIterable, Identifiable {

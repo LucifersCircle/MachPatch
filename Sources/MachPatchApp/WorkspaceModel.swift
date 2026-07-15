@@ -1,7 +1,9 @@
 import Combine
 import Foundation
 import MachPatchAnalyzer
+import MachPatchBuilder
 import MachPatchCore
+import MachPatchGenerator
 
 @MainActor
 final class WorkspaceModel: ObservableObject {
@@ -16,6 +18,9 @@ final class WorkspaceModel: ObservableObject {
     @Published var isProjectExporterPresented = false
     @Published var workspaceAlert: WorkspaceAlert?
     @Published var pendingProjectImport: PendingProjectImport?
+    @Published private(set) var generatedSourcePreview: GeneratedSourcePreviewState =
+        .unavailable("Create a valid patch project to preview its generated source.")
+    @Published private(set) var architecturePreview: ArchitecturePreviewState = .unavailable
 
     private let loader: any TargetLoading
     private var loadTask: Task<Void, Never>?
@@ -45,7 +50,7 @@ final class WorkspaceModel: ObservableObject {
         navigation = .target
         classSearch = ""
         classFilter = .all
-        projectDraft = nil
+        replaceProjectDraft(nil)
         phase = .loading(inputURL)
         let loader = loader
 
@@ -54,7 +59,7 @@ final class WorkspaceModel: ObservableObject {
                 let loadedTarget = try await loader.loadTarget(at: inputURL)
                 try Task.checkCancellation()
                 self?.phase = .loaded(loadedTarget)
-                self?.projectDraft = PatchProjectDraft(loadedTarget: loadedTarget)
+                self?.replaceProjectDraft(PatchProjectDraft(loadedTarget: loadedTarget))
             } catch is CancellationError {
                 return
             } catch {
@@ -102,7 +107,7 @@ final class WorkspaceModel: ObservableObject {
                 else { return }
                 let analyzedTarget = currentTarget.replacingAnalysisState(.loaded(analysis))
                 self?.phase = .loaded(analyzedTarget)
-                self?.projectDraft = PatchProjectDraft(loadedTarget: analyzedTarget)
+                self?.replaceProjectDraft(PatchProjectDraft(loadedTarget: analyzedTarget))
             } catch is CancellationError {
                 return
             } catch {
@@ -151,6 +156,22 @@ final class WorkspaceModel: ObservableObject {
 
     var patchProject: PatchProject? {
         projectDraft?.project
+    }
+
+    var projectValidationReport: PatchProjectValidationReport? {
+        projectDraft?.validationReport
+    }
+
+    var availableArchitectureModes: [PatchArchitectureMode] {
+        guard let architecture = projectDraft?.target.selectedSlice.architecture else { return [] }
+        switch architecture {
+        case .arm64:
+            return [.automatic, .arm64, .universal]
+        case .arm64e:
+            return [.automatic, .arm64e, .universal]
+        default:
+            return [.automatic]
+        }
     }
 
     var projectDocument: PatchProjectDocument? {
@@ -262,20 +283,41 @@ final class WorkspaceModel: ObservableObject {
     func addPatch(className: String, method: ObjectiveCMethod) throws -> MethodPatch {
         guard var projectDraft else { throw PatchDraftError.projectUnavailable }
         let patch = try projectDraft.addPatch(className: className, method: method)
-        self.projectDraft = projectDraft
+        replaceProjectDraft(projectDraft)
         return patch
     }
 
     func updatePatch(_ patch: MethodPatch) {
         guard var projectDraft else { return }
         projectDraft.updatePatch(patch)
-        self.projectDraft = projectDraft
+        replaceProjectDraft(projectDraft)
     }
 
     func removePatch(id: String) {
         guard var projectDraft else { return }
         projectDraft.removePatch(id: id)
-        self.projectDraft = projectDraft
+        replaceProjectDraft(projectDraft)
+    }
+
+    func updateProjectName(_ projectName: String) {
+        updateProjectDraft { $0.projectName = projectName }
+    }
+
+    func updateArchitectureMode(_ architectureMode: PatchArchitectureMode) {
+        guard availableArchitectureModes.contains(architectureMode) else { return }
+        updateProjectDraft { $0.architectureMode = architectureMode }
+    }
+
+    func updateMinimumIOSVersion(_ minimumIOSVersion: String) {
+        updateProjectDraft { $0.minimumIOSVersion = minimumIOSVersion }
+    }
+
+    func updateOutputName(_ outputName: String) {
+        updateProjectDraft { $0.outputName = outputName }
+    }
+
+    func updateARCEnabled(_ enableARC: Bool) {
+        updateProjectDraft { $0.enableARC = enableARC }
     }
 
     private func matchesFilter(_ objectiveCClass: ObjectiveCClass) -> Bool {
@@ -295,7 +337,7 @@ final class WorkspaceModel: ObservableObject {
         _ project: PatchProject,
         targetOverride: PatchTargetIdentity? = nil
     ) {
-        projectDraft = PatchProjectDraft(project: project, targetOverride: targetOverride)
+        replaceProjectDraft(PatchProjectDraft(project: project, targetOverride: targetOverride))
         if let firstPatch = project.patches.first,
             let objectiveCClass = analysis?.metadata.classes.first(where: {
                 $0.name == firstPatch.className
@@ -333,4 +375,62 @@ final class WorkspaceModel: ObservableObject {
             || objectiveCClass.superclassName?.localizedCaseInsensitiveContains(query) == true
             || objectiveCClass.imageName?.localizedCaseInsensitiveContains(query) == true
     }
+
+    private func updateProjectDraft(_ update: (inout PatchProjectDraft) -> Void) {
+        guard var projectDraft else { return }
+        update(&projectDraft)
+        replaceProjectDraft(projectDraft)
+    }
+
+    private func replaceProjectDraft(_ projectDraft: PatchProjectDraft?) {
+        self.projectDraft = projectDraft
+        refreshBuildWorkspace()
+    }
+
+    private func refreshBuildWorkspace() {
+        guard let projectDraft else {
+            architecturePreview = .unavailable
+            generatedSourcePreview = .unavailable(
+                "Create a valid patch project to preview its generated source."
+            )
+            return
+        }
+
+        do {
+            architecturePreview = .resolved(
+                try ArchitectureResolver.resolve(
+                    mode: projectDraft.architectureMode,
+                    selectedSlice: projectDraft.target.selectedSlice
+                )
+            )
+        } catch {
+            architecturePreview = .failed(error.localizedDescription)
+        }
+
+        guard projectDraft.validationReport.isValid else {
+            generatedSourcePreview = .unavailable(
+                "Fix the project validation errors to regenerate the source preview."
+            )
+            return
+        }
+
+        do {
+            generatedSourcePreview = .ready(
+                try ObjectiveCSourceGenerator().generate(projectDraft.project)
+            )
+        } catch {
+            generatedSourcePreview = .unavailable(error.localizedDescription)
+        }
+    }
+}
+
+enum GeneratedSourcePreviewState: Equatable {
+    case unavailable(String)
+    case ready(GeneratedSourceBundle)
+}
+
+enum ArchitecturePreviewState: Equatable {
+    case unavailable
+    case resolved(BuildArchitectureResolution)
+    case failed(String)
 }

@@ -54,6 +54,29 @@ struct TargetSidebar: View {
                     }
                 }
 
+                if let projectDraft = model.projectDraft {
+                    Section("Patch Project") {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Build Workspace")
+                                Text(
+                                    "\(projectDraft.patches.count) patch\(projectDraft.patches.count == 1 ? "" : "es")"
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: "hammer.fill")
+                                .foregroundStyle(
+                                    model.navigation == .build
+                                        ? Color(nsColor: .alternateSelectedControlTextColor)
+                                        : .accentColor
+                                )
+                        }
+                        .tag(WorkspaceNavigation.build)
+                    }
+                }
+
                 analysisNavigation(loadedTarget)
             }
         }
