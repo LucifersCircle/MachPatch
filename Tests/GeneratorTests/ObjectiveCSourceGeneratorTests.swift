@@ -29,6 +29,11 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
         let source = try generate(makeProject(patches: allActionPatches()))
 
         XCTAssertTrue(source.hasSuffix("\n"))
+        XCTAssertTrue(
+            source.contains(
+                "Logging destination: target-process NSLog, default severity, [MachPatch] prefix."
+            )
+        )
         XCTAssertTrue(source.contains("#import <objc/runtime.h>"))
         XCTAssertTrue(
             source.contains("static BOOL MPPatch_0_FixtureManager_featureEnabled_Replacement"))

@@ -100,6 +100,10 @@ struct AdvancedPatchEditorView: View {
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                if counter.logEachInvocation {
+                    PatchLoggingSummaryView(payload: "Class, selector, and invocation count")
+                        .padding(.leading, 18)
+                }
             }
         }
     }

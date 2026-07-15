@@ -193,6 +193,12 @@ pointer. `logInvocation` and `logArguments` call the original unchanged;
 `logOriginalReturnValue` calls, logs, and returns it. `callOriginalAndReplace` calls the original
 before returning its typed replacement.
 
+Generated logging actions write from the target application process through `NSLog` at its fixed
+default severity. Every generated message begins with `[MachPatch]`. Inspect entries in macOS
+Console by filtering for the target process; a LiveContainer console may also expose them depending
+on its configuration. Argument and return-value logging can record private application or user
+data, so those actions should be limited to deliberate debugging builds.
+
 Floating-point trampolines use exact `float` or `double` function-pointer types in argument and
 return positions. Logging promotes `float` to `double` for the variadic call and uses enough
 significant digits to preserve the encoded scalar value. Class and selector results remain typed

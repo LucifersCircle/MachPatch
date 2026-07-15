@@ -844,13 +844,22 @@ private struct PatchEditorView: View {
             actionExplanation(
                 "Writes a [MachPatch] NSLog entry containing the class and selector, then calls the original method unchanged. Read it through a LiveContainer console when available, or the device log in macOS Console."
             )
+            PatchLoggingSummaryView(payload: "Class and selector")
         case .logArguments:
             actionExplanation(
                 "Writes [MachPatch] NSLog entries for the invocation and each supported argument, then calls the original method unchanged. Read them through a LiveContainer console when available, or the device log in macOS Console."
             )
+            PatchLoggingSummaryView(
+                payload: "Class, selector, and supported arguments",
+                mayContainSensitiveValues: true
+            )
         case .logOriginalReturnValue:
             actionExplanation(
                 "Calls the original method, writes its result to NSLog with a [MachPatch] prefix, and returns that same result unchanged."
+            )
+            PatchLoggingSummaryView(
+                payload: "Class, selector, and original result",
+                mayContainSensitiveValues: true
             )
         case .callOriginal:
             actionExplanation(
@@ -1094,9 +1103,12 @@ extension PatchActionKind {
         case .returnSelector: "Register and return an Objective-C selector by name."
         case .returnString: "Return a constant Objective-C string without calling the original."
         case .returnObject: "Construct and return an NSNumber, collection, or NSURL."
-        case .logInvocation: "Log the class and selector, then call the original unchanged."
-        case .logArguments: "Log supported arguments, then call the original unchanged."
-        case .logOriginalReturnValue: "Call the original, log its result, and return it unchanged."
+        case .logInvocation:
+            "Write the class and selector to NSLog at default severity, then call the original unchanged."
+        case .logArguments:
+            "Write supported arguments to NSLog at default severity, then call the original unchanged."
+        case .logOriginalReturnValue:
+            "Call the original, write its result to NSLog at default severity, and return it unchanged."
         case .callOriginal: "Call the original without logging or changing its result."
         case .callOriginalAndReplace: "Call the original, then discard and replace its result."
         }
