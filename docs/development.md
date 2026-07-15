@@ -13,13 +13,16 @@ swift build
 swift test
 .build/debug/machpatch resolve /path/to/Fixture.ipa
 .build/debug/machpatch resolve /path/to/Fixture.app
+.build/debug/machpatch resolve /path/to/FixtureKit.framework
 .build/debug/machpatch resolve /path/to/FixtureExecutable
 ```
 
-A successful IPA result includes `sourceType`, bundle metadata, the executable name and temporary
-path, and a lowercase 64-character SHA-256. The temporary `MachPatch-*` workspace must no longer
-exist after the command returns. A matching standalone executable and IPA-contained executable
-must report the same hash.
+A successful bundle result includes `sourceType`, host metadata, an ordered image catalog, and a
+lowercase 64-character SHA-256 for each image. App inputs include the main executable plus valid
+embedded frameworks and app extensions. Malformed embedded candidates produce discovery issues;
+a malformed standalone framework fails resolution. The temporary `MachPatch-*` workspace must no
+longer exist after an IPA command returns. Matching standalone and contained images must report
+the same hash.
 
 ## Mach-O inspection acceptance checks
 

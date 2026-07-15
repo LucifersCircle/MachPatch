@@ -23,6 +23,58 @@ final class PatchProjectTests: XCTestCase {
         XCTAssertEqual(action["value"] as? Bool, true)
     }
 
+    func testSelectedImageIdentityRoundTripsAndLegacyProjectsDefaultToPrimaryImage() throws {
+        let base = makeProject()
+        let frameworkIdentity = PatchImageIdentity(
+            kind: .dynamicFramework,
+            relativePath: "Frameworks/FixtureKit.framework/FixtureKit",
+            bundleIdentifier: "com.example.fixture-kit",
+            executableName: "FixtureKit",
+            executableSHA256: String(repeating: "b", count: 64)
+        )
+        let project = PatchProject(
+            projectName: base.projectName,
+            target: PatchTargetIdentity(
+                bundleIdentifier: base.target.bundleIdentifier,
+                executableName: base.target.executableName,
+                executableSHA256: base.target.executableSHA256,
+                selectedImage: frameworkIdentity,
+                selectedSlice: base.target.selectedSlice,
+                minimumIOSVersion: base.target.minimumIOSVersion
+            ),
+            build: base.build,
+            patches: base.patches
+        )
+
+        XCTAssertEqual(
+            try PatchProjectCodec.decode(PatchProjectCodec.encode(project)).target.selectedImage,
+            frameworkIdentity
+        )
+
+        let repositoryRoot = URL(filePath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let exampleData = try Data(
+            contentsOf: repositoryRoot.appending(path: "Examples/ExamplePatch.json")
+        )
+        var legacyObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: exampleData) as? [String: Any]
+        )
+        var legacyTarget = try XCTUnwrap(legacyObject["target"] as? [String: Any])
+        legacyTarget.removeValue(forKey: "selectedImage")
+        legacyObject["target"] = legacyTarget
+        let legacy = try PatchProjectCodec.decode(
+            JSONSerialization.data(withJSONObject: legacyObject)
+        )
+        XCTAssertEqual(legacy.target.selectedImage.kind, .mainExecutable)
+        XCTAssertEqual(legacy.target.selectedImage.relativePath, legacy.target.executableName)
+        XCTAssertEqual(
+            legacy.target.selectedImage.executableSHA256,
+            legacy.target.executableSHA256
+        )
+    }
+
     func testRepositoryExampleIsAValidVersionOneProject() throws {
         let repositoryRoot = URL(filePath: #filePath)
             .deletingLastPathComponent()

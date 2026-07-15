@@ -22,13 +22,14 @@ swift test
 
 ## Resolve an input
 
-`resolve` accepts a decrypted IPA, an iOS `.app` directory, or a direct Mach-O executable:
+`resolve` accepts a decrypted IPA, an iOS `.app` directory, a `.framework` bundle, or a direct
+Mach-O executable:
 
 ```bash
 .build/debug/machpatch resolve "/path/with spaces/Fixture.ipa"
 ```
 
-It prints stable JSON containing the bundle metadata, resolved executable path, and SHA-256:
+It prints stable JSON containing host metadata plus independently hashed inspectable images:
 
 ```json
 {
@@ -37,6 +38,20 @@ It prints stable JSON containing the bundle metadata, resolved executable path, 
   "executableName": "Fixture",
   "executablePath": "/private/tmp/MachPatch-…/Extracted/Payload/Fixture.app/Fixture",
   "minimumOSVersion": "15.0",
+  "images": [
+    {
+      "kind": "mainExecutable",
+      "relativePath": "Fixture",
+      "executableName": "Fixture",
+      "sha256": "…"
+    },
+    {
+      "kind": "dynamicFramework",
+      "relativePath": "Frameworks/FixtureKit.framework/FixtureKit",
+      "executableName": "FixtureKit",
+      "sha256": "…"
+    }
+  ],
   "sha256": "…",
   "sourcePath": "/path/with spaces/Fixture.ipa",
   "sourceType": "ipa",
@@ -46,7 +61,10 @@ It prints stable JSON containing the bundle metadata, resolved executable path, 
 
 IPA paths in the JSON refer to a scoped temporary workspace. The resolver removes that workspace
 immediately after the command finishes. Library clients use the scoped `withResolvedTarget` API
-to inspect an extracted executable while it is available.
+to inspect extracted images while they are available. App inputs enumerate the main executable,
+embedded frameworks, supported app extensions, and frameworks nested inside those extensions
+without executing bundle content. Unsafe or malformed embedded candidates are retained as
+discovery diagnostics instead of hiding the valid host image.
 
 ## Inspect Mach-O metadata
 

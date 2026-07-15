@@ -42,6 +42,152 @@ final class InputResolverTests: XCTestCase {
             XCTAssertEqual(target.executableName, "Fixture Binary")
             XCTAssertEqual(target.bundlePath, applicationURL.path)
             XCTAssertTrue(FileManager.default.fileExists(atPath: target.executablePath))
+            XCTAssertEqual(target.images.map(\.kind), [.mainExecutable])
+            XCTAssertEqual(target.primaryImage.sha256, target.sha256)
+        }
+    }
+
+    func testResolvesStandaloneFrameworkAndCalculatesIndependentImageIdentity() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let frameworkURL = root.appending(
+            path: "Fixture Kit.framework", directoryHint: .isDirectory)
+        try makeBundle(
+            at: frameworkURL,
+            executableName: "Fixture Kit",
+            bundleIdentifier: "com.example.fixture-kit",
+            displayName: "Fixture Kit"
+        )
+
+        try InputResolver().withResolvedTarget(at: frameworkURL) { target in
+            XCTAssertEqual(target.sourceType, .frameworkBundle)
+            XCTAssertEqual(target.bundlePath, frameworkURL.path)
+            XCTAssertEqual(target.bundleIdentifier, "com.example.fixture-kit")
+            XCTAssertEqual(target.executableName, "Fixture Kit")
+            XCTAssertEqual(target.images.count, 1)
+
+            let image = try XCTUnwrap(target.images.first)
+            XCTAssertEqual(image.kind, .standaloneFramework)
+            XCTAssertEqual(image.relativePath, "Fixture Kit")
+            XCTAssertEqual(image.bundlePath, frameworkURL.path)
+            XCTAssertEqual(image.sha256, target.sha256)
+            XCTAssertTrue(image.hasBundleMetadata)
+        }
+    }
+
+    func testEnumeratesEmbeddedFrameworksExtensionsAndNestedFrameworksInStableOrder() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let applicationURL = root.appending(path: "Host.app", directoryHint: .isDirectory)
+        try makeApplication(at: applicationURL, executableName: "Host")
+
+        let frameworksURL = applicationURL.appending(
+            path: "Frameworks", directoryHint: .isDirectory)
+        try makeBundle(
+            at: frameworksURL.appending(path: "Zeta.framework", directoryHint: .isDirectory),
+            executableName: "Zeta",
+            bundleIdentifier: "com.example.zeta",
+            displayName: "Zeta"
+        )
+        let alphaURL = frameworksURL.appending(
+            path: "Alpha.framework", directoryHint: .isDirectory)
+        try makeBundle(
+            at: alphaURL,
+            executableName: "Alpha",
+            bundleIdentifier: "com.example.alpha",
+            displayName: "Alpha"
+        )
+
+        let extensionURL = applicationURL.appending(
+            path: "PlugIns/Widget.appex", directoryHint: .isDirectory)
+        try makeBundle(
+            at: extensionURL,
+            executableName: "Widget",
+            bundleIdentifier: "com.example.fixture.widget",
+            displayName: "Widget"
+        )
+        try makeBundle(
+            at: extensionURL.appending(
+                path: "Frameworks/Nested.framework", directoryHint: .isDirectory),
+            executableName: "Nested",
+            bundleIdentifier: "com.example.nested",
+            displayName: "Nested"
+        )
+
+        try InputResolver().withResolvedTarget(at: applicationURL) { target in
+            XCTAssertEqual(
+                target.images.map(\.relativePath),
+                [
+                    "Host",
+                    "Frameworks/Alpha.framework/Alpha",
+                    "Frameworks/Zeta.framework/Zeta",
+                    "PlugIns/Widget.appex/Frameworks/Nested.framework/Nested",
+                    "PlugIns/Widget.appex/Widget",
+                ]
+            )
+            XCTAssertEqual(
+                target.images.map(\.kind),
+                [
+                    .mainExecutable,
+                    .dynamicFramework,
+                    .dynamicFramework,
+                    .dynamicFramework,
+                    .appExtension,
+                ]
+            )
+            XCTAssertEqual(target.images.map(\.id).count, Set(target.images.map(\.id)).count)
+            XCTAssertEqual(
+                target.images.first(where: { $0.executableName == "Alpha" })?.bundleIdentifier,
+                "com.example.alpha"
+            )
+            XCTAssertTrue(target.imageDiscoveryIssues.isEmpty)
+        }
+    }
+
+    func testReportsMalformedEmbeddedFrameworkWithoutDiscardingHost() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let applicationURL = root.appending(path: "Host.app", directoryHint: .isDirectory)
+        try makeApplication(at: applicationURL, executableName: "Host")
+        let frameworkURL = applicationURL.appending(
+            path: "Frameworks/Broken.framework", directoryHint: .isDirectory)
+        try makeBundle(
+            at: frameworkURL,
+            executableName: "Broken",
+            bundleIdentifier: "com.example.broken",
+            displayName: "Broken",
+            writeExecutable: false
+        )
+
+        try InputResolver().withResolvedTarget(at: applicationURL) { target in
+            XCTAssertEqual(target.images.map(\.executableName), ["Host"])
+            XCTAssertEqual(target.imageDiscoveryIssues.count, 1)
+            let issue = try XCTUnwrap(target.imageDiscoveryIssues.first)
+            XCTAssertEqual(issue.kind, .dynamicFramework)
+            XCTAssertEqual(issue.relativeBundlePath, "Frameworks/Broken.framework")
+            XCTAssertTrue(issue.message.contains("Broken.framework/Broken"))
+        }
+    }
+
+    func testRejectsStandaloneFrameworkWithMissingExecutable() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let frameworkURL = root.appending(
+            path: "Broken.framework", directoryHint: .isDirectory)
+        try makeBundle(
+            at: frameworkURL,
+            executableName: "Broken",
+            bundleIdentifier: "com.example.broken",
+            displayName: "Broken",
+            writeExecutable: false
+        )
+
+        XCTAssertThrowsError(try InputResolver().withResolvedTarget(at: frameworkURL) { _ in }) {
+            error in
+            XCTAssertEqual(
+                error as? InputResolutionError,
+                .executableNotFound(frameworkURL.appending(path: "Broken").path)
+            )
         }
     }
 
@@ -206,10 +352,25 @@ final class InputResolverTests: XCTestCase {
     }
 
     private func makeApplication(at url: URL, executableName: String?) throws {
+        try makeBundle(
+            at: url,
+            executableName: executableName,
+            bundleIdentifier: "com.example.fixture",
+            displayName: "Fixture App"
+        )
+    }
+
+    private func makeBundle(
+        at url: URL,
+        executableName: String?,
+        bundleIdentifier: String,
+        displayName: String,
+        writeExecutable: Bool = true
+    ) throws {
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         var info: [String: Any] = [
-            "CFBundleIdentifier": "com.example.fixture",
-            "CFBundleDisplayName": "Fixture App",
+            "CFBundleIdentifier": bundleIdentifier,
+            "CFBundleDisplayName": displayName,
             "MinimumOSVersion": "15.0",
             "CFBundleSupportedPlatforms": ["iPhoneOS"],
         ]
@@ -223,7 +384,7 @@ final class InputResolverTests: XCTestCase {
         )
         try plistData.write(to: url.appending(path: "Info.plist"))
 
-        if let executableName, !executableName.contains("/") {
+        if writeExecutable, let executableName, !executableName.contains("/") {
             try machOFixtureData().write(to: url.appending(path: executableName))
         }
     }

@@ -54,6 +54,53 @@ struct TargetSidebar: View {
                     }
                 }
 
+                Section("Images") {
+                    ForEach(loadedTarget.images) { image in
+                        Button {
+                            model.selectImage(id: image.id)
+                        } label: {
+                            Label {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(imageDisplayName(image.image))
+                                        .lineLimit(1)
+                                    Text(image.image.relativePath)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                    Text(imageSubtitle(image))
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                        .lineLimit(1)
+                                }
+                            } icon: {
+                                imageStatusIcon(image, loadedTarget: loadedTarget)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .help(imageHelp(image))
+                    }
+
+                    ForEach(
+                        Array(loadedTarget.target.imageDiscoveryIssues.enumerated()),
+                        id: \.offset
+                    ) { _, issue in
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(issue.relativeBundlePath)
+                                    .lineLimit(1)
+                                Text(issue.message)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+                        } icon: {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                        }
+                        .help(issue.message)
+                    }
+                }
+
                 if let projectDraft = model.projectDraft {
                     Section("Patch Project") {
                         Label {
@@ -86,6 +133,66 @@ struct TargetSidebar: View {
 
     private func displayName(for loadedTarget: LoadedTarget) -> String {
         loadedTarget.target.displayName ?? loadedTarget.target.executableName
+    }
+
+    private func imageDisplayName(_ image: ResolvedImage) -> String {
+        image.displayName ?? image.executableName
+    }
+
+    private func imageSubtitle(_ loadedImage: LoadedTargetImage) -> String {
+        let kind: String =
+            switch loadedImage.image.kind {
+            case .mainExecutable: "Main executable"
+            case .dynamicFramework: "Framework"
+            case .appExtension: "App extension"
+            case .standaloneFramework: "Framework"
+            case .standaloneMachO: "Mach-O"
+            }
+        switch loadedImage.inspectionState {
+        case .available(let slices, _):
+            let architectures = Array(Set(slices.map(\.architecture.rawValue))).sorted()
+            let encryption = slices.contains(where: \.encrypted) ? "encrypted" : "decrypted"
+            let metadata = loadedImage.image.hasBundleMetadata ? "metadata" : "no metadata"
+            return
+                "\(kind) · \(architectures.joined(separator: ", ")) · \(encryption) · \(metadata)"
+        case .failed:
+            return "\(kind) · inspection failed"
+        }
+    }
+
+    @ViewBuilder
+    private func imageStatusIcon(
+        _ image: LoadedTargetImage,
+        loadedTarget: LoadedTarget
+    ) -> some View {
+        if case .failed = image.inspectionState {
+            Image(systemName: "xmark.circle.fill")
+                .foregroundStyle(.red)
+        } else if loadedTarget.inspection.image.id == image.id {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+        } else {
+            Image(systemName: imageSymbol(image.image.kind))
+                .foregroundStyle(Color.accentColor)
+        }
+    }
+
+    private func imageSymbol(_ kind: ResolvedImageKind) -> String {
+        switch kind {
+        case .mainExecutable: "app.fill"
+        case .dynamicFramework, .standaloneFramework: "shippingbox.fill"
+        case .appExtension: "puzzlepiece.extension.fill"
+        case .standaloneMachO: "terminal.fill"
+        }
+    }
+
+    private func imageHelp(_ loadedImage: LoadedTargetImage) -> String {
+        switch loadedImage.inspectionState {
+        case .available:
+            loadedImage.image.relativePath
+        case .failed(let message):
+            "\(loadedImage.image.relativePath)\n\(message)"
+        }
     }
 
     @ViewBuilder

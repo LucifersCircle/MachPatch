@@ -18,13 +18,15 @@ struct PatchProjectDraft: Equatable {
             let targetIdentity = Self.targetIdentity(for: loadedTarget)
         else { return nil }
 
-        let displayName = loadedTarget.target.displayName ?? loadedTarget.target.executableName
+        let displayName =
+            loadedTarget.inspection.image.displayName
+            ?? loadedTarget.inspection.image.executableName
         projectName = "\(displayName) Patch"
         target = targetIdentity
         architectureMode = .automatic
         minimumIOSVersion =
             loadedTarget.target.minimumOSVersion ?? slice.minimumOSVersion ?? ""
-        outputName = Self.defaultOutputName(for: loadedTarget.target.executableName)
+        outputName = Self.defaultOutputName(for: loadedTarget.inspection.image.executableName)
         enableARC = true
         patches = []
     }
@@ -124,11 +126,13 @@ struct PatchProjectDraft: Equatable {
             bundleIdentifier: loadedTarget.target.bundleIdentifier,
             executableName: loadedTarget.target.executableName,
             executableSHA256: loadedTarget.target.sha256,
+            selectedImage: PatchImageIdentity(image: loadedTarget.inspection.image),
             selectedSlice: PatchSelectedSlice(
                 architecture: slice.architecture,
                 cpuSubtype: slice.cpuSubtype
             ),
-            minimumIOSVersion: loadedTarget.target.minimumOSVersion ?? slice.minimumOSVersion
+            minimumIOSVersion: loadedTarget.inspection.image.minimumOSVersion
+                ?? loadedTarget.target.minimumOSVersion ?? slice.minimumOSVersion
         )
     }
 

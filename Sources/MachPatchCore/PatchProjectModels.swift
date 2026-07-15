@@ -23,9 +23,12 @@ public struct PatchProject: Codable, Equatable, Sendable {
 }
 
 public struct PatchTargetIdentity: Codable, Equatable, Sendable {
+    /// Host application or standalone-input identity.
     public let bundleIdentifier: String?
     public let executableName: String
     public let executableSHA256: String
+    /// The image whose Objective-C metadata the patches were created from.
+    public let selectedImage: PatchImageIdentity
     public let selectedSlice: PatchSelectedSlice
     public let minimumIOSVersion: String?
 
@@ -36,11 +39,121 @@ public struct PatchTargetIdentity: Codable, Equatable, Sendable {
         selectedSlice: PatchSelectedSlice,
         minimumIOSVersion: String?
     ) {
+        self.init(
+            bundleIdentifier: bundleIdentifier,
+            executableName: executableName,
+            executableSHA256: executableSHA256,
+            selectedImage: PatchImageIdentity(
+                kind: .mainExecutable,
+                relativePath: executableName,
+                bundleIdentifier: bundleIdentifier,
+                executableName: executableName,
+                executableSHA256: executableSHA256
+            ),
+            selectedSlice: selectedSlice,
+            minimumIOSVersion: minimumIOSVersion
+        )
+    }
+
+    public init(
+        bundleIdentifier: String?,
+        executableName: String,
+        executableSHA256: String,
+        selectedImage: PatchImageIdentity,
+        selectedSlice: PatchSelectedSlice,
+        minimumIOSVersion: String?
+    ) {
         self.bundleIdentifier = bundleIdentifier
         self.executableName = executableName
         self.executableSHA256 = executableSHA256
+        self.selectedImage = selectedImage
         self.selectedSlice = selectedSlice
         self.minimumIOSVersion = minimumIOSVersion
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case bundleIdentifier
+        case executableName
+        case executableSHA256
+        case selectedImage
+        case selectedSlice
+        case minimumIOSVersion
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let bundleIdentifier = try container.decodeIfPresent(
+            String.self,
+            forKey: .bundleIdentifier
+        )
+        let executableName = try container.decode(String.self, forKey: .executableName)
+        let executableSHA256 = try container.decode(String.self, forKey: .executableSHA256)
+        self.init(
+            bundleIdentifier: bundleIdentifier,
+            executableName: executableName,
+            executableSHA256: executableSHA256,
+            selectedImage: try container.decodeIfPresent(
+                PatchImageIdentity.self,
+                forKey: .selectedImage
+            )
+                ?? PatchImageIdentity(
+                    kind: .mainExecutable,
+                    relativePath: executableName,
+                    bundleIdentifier: bundleIdentifier,
+                    executableName: executableName,
+                    executableSHA256: executableSHA256
+                ),
+            selectedSlice: try container.decode(
+                PatchSelectedSlice.self,
+                forKey: .selectedSlice
+            ),
+            minimumIOSVersion: try container.decodeIfPresent(
+                String.self,
+                forKey: .minimumIOSVersion
+            )
+        )
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(bundleIdentifier, forKey: .bundleIdentifier)
+        try container.encode(executableName, forKey: .executableName)
+        try container.encode(executableSHA256, forKey: .executableSHA256)
+        try container.encode(selectedImage, forKey: .selectedImage)
+        try container.encode(selectedSlice, forKey: .selectedSlice)
+        try container.encodeIfPresent(minimumIOSVersion, forKey: .minimumIOSVersion)
+    }
+}
+
+public struct PatchImageIdentity: Codable, Equatable, Sendable {
+    public let kind: ResolvedImageKind
+    public let relativePath: String
+    public let bundleIdentifier: String?
+    public let executableName: String
+    public let executableSHA256: String
+
+    public init(
+        kind: ResolvedImageKind,
+        relativePath: String,
+        bundleIdentifier: String?,
+        executableName: String,
+        executableSHA256: String
+    ) {
+        self.kind = kind
+        self.relativePath = relativePath
+        self.bundleIdentifier = bundleIdentifier
+        self.executableName = executableName
+        self.executableSHA256 = executableSHA256
+    }
+
+    public init(image: ResolvedImage) {
+        self.init(
+            kind: image.kind,
+            relativePath: image.relativePath,
+            bundleIdentifier: image.bundleIdentifier,
+            executableName: image.executableName,
+            executableSHA256: image.sha256
+        )
     }
 }
 

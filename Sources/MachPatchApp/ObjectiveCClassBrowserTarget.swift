@@ -61,7 +61,7 @@ enum ObjectiveCClassBrowserCatalog {
                 id: objectiveCClass?.id ?? "category-owner:\(className)",
                 name: className,
                 superclassName: objectiveCClass?.superclassName,
-                imageName: objectiveCClass?.imageName ?? analysis.target.executableName,
+                imageName: objectiveCClass?.imageName ?? analysis.image.executableName,
                 isLikelyAppDefined: objectiveCClass?.isLikelyAppDefined ?? false,
                 isObjectiveCVisibleSwift: objectiveCClass?.isObjectiveCVisibleSwift ?? false,
                 isCategoryOnly: objectiveCClass == nil,

@@ -14,7 +14,7 @@ struct MachPatchCommand {
         USAGE: machpatch <command> [arguments]
 
         COMMANDS:
-          resolve <path>         Resolve an IPA, .app, or Mach-O executable.
+          resolve <path>         Resolve an IPA, .app, .framework, or Mach-O executable.
           inspect <path> [--json]
                                  Inspect every Mach-O slice and load command.
           architectures <path>  Report buildable device slices and architecture modes.
@@ -311,12 +311,17 @@ struct MachPatchCommand {
                 report = try InputResolver().withResolvedTarget(
                     at: URL(filePath: targetPath)
                 ) { target in
+                    let image = try AnalyzedPatchProjectValidator.selectedImage(
+                        for: project,
+                        in: target
+                    )
                     let sliceIndex = try AnalyzedPatchProjectValidator.selectedSliceIndex(
                         for: project,
                         in: target
                     )
                     let analysis = try ObjectiveCAnalyzer().analyze(
                         target,
+                        image: image,
                         sliceIndex: sliceIndex
                     )
                     return try AnalyzedPatchProjectValidator.validate(

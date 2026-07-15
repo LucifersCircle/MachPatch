@@ -60,10 +60,16 @@ struct ClassBrowserView: View {
                     if let superclass = objectiveCClass.superclassName {
                         Text("Subclass of \(superclass)")
                     }
-                    if objectiveCClass.isLikelyAppDefined {
-                        Text("Likely app-defined")
-                            .foregroundStyle(.tint)
-                    }
+                    Text("Image: \(objectiveCClass.imageName)")
+                    Text(
+                        objectiveCClass.isLikelyAppDefined
+                            ? "Heuristic: likely app-defined"
+                            : "Heuristic: known third-party"
+                    )
+                    .foregroundStyle(
+                        objectiveCClass.isLikelyAppDefined
+                            ? Color.accentColor : Color.secondary
+                    )
                     if objectiveCClass.isObjectiveCVisibleSwift {
                         Text("Objective-C-visible Swift")
                             .foregroundStyle(.orange)

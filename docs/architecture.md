@@ -45,8 +45,10 @@ Validate input kind
   -> extract with /usr/bin/ditto using a Process argument array
   -> locate the single Payload/*.app bundle
   -> parse Info.plist without executing bundle content
-  -> verify the resolved file has a Mach-O magic value
-  -> stream its SHA-256
+  -> resolve the host executable and enumerate embedded framework/extension bundles
+  -> validate declared executable names and reject symbolic links
+  -> verify every resolved file has a Mach-O magic value
+  -> stream an independent SHA-256 for every image
   -> remove the workspace when the scoped operation exits
 ```
 
@@ -100,9 +102,10 @@ relationships. Unresolved method references fail extraction rather than merging 
 global name list. Classes, methods, properties, ivars, protocols, and categories are normalized,
 sorted, and assigned deterministic IDs at the shared boundary.
 
-`isLikelyAppDefined` is intentionally heuristic. It currently means metadata came from the main
-executable and the class name did not match a small known third-party SDK marker list. It must
-never be presented as conclusive first-party ownership.
+Each analysis records its selected image explicitly, including kind, relative path, bundle
+metadata, executable name, and SHA-256. `isLikelyAppDefined` remains a separate class-name
+heuristic based on a small known third-party SDK marker list. It must never be presented as
+conclusive first-party ownership or confused with the image that supplied the metadata.
 
 `ObjectiveCMethodCatalog` canonicalizes class and category declarations by runtime class, method
 kind, and selector. Equal nonempty encodings share one browser and validation record while

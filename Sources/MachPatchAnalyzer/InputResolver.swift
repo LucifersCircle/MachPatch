@@ -42,6 +42,10 @@ public struct InputResolver: Sendable {
                 try resolveApplication(at: sourceURL, source: sourceURL, type: .applicationBundle))
         }
 
+        if values.isDirectory == true, sourceURL.pathExtension.lowercased() == "framework" {
+            return try body(try resolveFramework(at: sourceURL))
+        }
+
         if values.isRegularFile == true, sourceURL.pathExtension.lowercased() == "ipa" {
             return try withExtractedIPA(at: sourceURL, body)
         }
@@ -179,30 +183,58 @@ public struct InputResolver: Sendable {
         source sourceURL: URL,
         type: InputKind
     ) throws -> ResolvedTarget {
-        let infoPlistURL = applicationURL.appending(
+        let mainImage = try resolveBundleImage(
+            at: applicationURL,
+            kind: .mainExecutable,
+            relativeTo: applicationURL
+        )
+        let discovery = discoverEmbeddedImages(in: applicationURL)
+
+        return ResolvedTarget(
+            sourceType: type,
+            sourcePath: sourceURL.path,
+            bundlePath: applicationURL.path,
+            bundleIdentifier: mainImage.bundleIdentifier,
+            displayName: mainImage.displayName,
+            minimumOSVersion: mainImage.minimumOSVersion,
+            supportedPlatforms: mainImage.supportedPlatforms,
+            executableName: mainImage.executableName,
+            executablePath: mainImage.executablePath,
+            sha256: mainImage.sha256,
+            images: [mainImage] + discovery.images,
+            imageDiscoveryIssues: discovery.issues
+        )
+    }
+
+    private func resolveFramework(at frameworkURL: URL) throws -> ResolvedTarget {
+        let image = try resolveBundleImage(
+            at: frameworkURL,
+            kind: .standaloneFramework,
+            relativeTo: frameworkURL
+        )
+        return ResolvedTarget(
+            sourceType: .frameworkBundle,
+            sourcePath: frameworkURL.path,
+            bundlePath: frameworkURL.path,
+            bundleIdentifier: image.bundleIdentifier,
+            displayName: image.displayName,
+            minimumOSVersion: image.minimumOSVersion,
+            supportedPlatforms: image.supportedPlatforms,
+            executableName: image.executableName,
+            executablePath: image.executablePath,
+            sha256: image.sha256,
+            images: [image]
+        )
+    }
+
+    private func resolveBundleImage(
+        at bundleURL: URL,
+        kind: ResolvedImageKind,
+        relativeTo rootBundleURL: URL
+    ) throws -> ResolvedImage {
+        let dictionary = try readBundleInfo(at: bundleURL)
+        let infoPlistURL = bundleURL.appending(
             path: "Info.plist", directoryHint: .notDirectory)
-        guard FileManager.default.fileExists(atPath: infoPlistURL.path) else {
-            throw InputResolutionError.missingInfoPlist(infoPlistURL.path)
-        }
-
-        let dictionary: [String: Any]
-        do {
-            let data = try Data(contentsOf: infoPlistURL, options: [.mappedIfSafe])
-            let propertyList = try PropertyListSerialization.propertyList(
-                from: data,
-                options: [],
-                format: nil
-            )
-            guard let decodedDictionary = propertyList as? [String: Any] else {
-                throw InputResolutionError.unreadableInfoPlist("root value is not a dictionary")
-            }
-            dictionary = decodedDictionary
-        } catch let error as InputResolutionError {
-            throw error
-        } catch {
-            throw InputResolutionError.unreadableInfoPlist(error.localizedDescription)
-        }
-
         guard let executableName = dictionary["CFBundleExecutable"] as? String,
             !executableName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else {
@@ -212,7 +244,7 @@ public struct InputResolver: Sendable {
             throw InputResolutionError.unsafeExecutableName(executableName)
         }
 
-        let executableURL = applicationURL.appending(
+        let executableURL = bundleURL.appending(
             path: executableName,
             directoryHint: .notDirectory
         )
@@ -230,10 +262,12 @@ public struct InputResolver: Sendable {
             throw InputResolutionError.executableIsNotMachO(executableURL.path)
         }
 
-        return ResolvedTarget(
-            sourceType: type,
-            sourcePath: sourceURL.path,
-            bundlePath: applicationURL.path,
+        let relativePath = relativePath(of: executableURL, from: rootBundleURL)
+        return ResolvedImage(
+            id: "\(kind.rawValue):\(relativePath)",
+            kind: kind,
+            relativePath: relativePath,
+            bundlePath: bundleURL.path,
             bundleIdentifier: dictionary["CFBundleIdentifier"] as? String,
             displayName: (dictionary["CFBundleDisplayName"] as? String)
                 ?? (dictionary["CFBundleName"] as? String),
@@ -243,6 +277,169 @@ public struct InputResolver: Sendable {
             executablePath: executableURL.path,
             sha256: try sha256(of: executableURL)
         )
+    }
+
+    private func readBundleInfo(at bundleURL: URL) throws -> [String: Any] {
+        let infoPlistURL = bundleURL.appending(
+            path: "Info.plist", directoryHint: .notDirectory)
+        guard FileManager.default.fileExists(atPath: infoPlistURL.path) else {
+            throw InputResolutionError.missingInfoPlist(infoPlistURL.path)
+        }
+
+        do {
+            let data = try Data(contentsOf: infoPlistURL, options: [.mappedIfSafe])
+            let propertyList = try PropertyListSerialization.propertyList(
+                from: data,
+                options: [],
+                format: nil
+            )
+            guard let dictionary = propertyList as? [String: Any] else {
+                throw InputResolutionError.unreadableInfoPlist("root value is not a dictionary")
+            }
+            return dictionary
+        } catch let error as InputResolutionError {
+            throw error
+        } catch {
+            throw InputResolutionError.unreadableInfoPlist(error.localizedDescription)
+        }
+    }
+
+    private func discoverEmbeddedImages(
+        in applicationURL: URL
+    ) -> (images: [ResolvedImage], issues: [ResolvedImageDiscoveryIssue]) {
+        var images: [ResolvedImage] = []
+        var issues: [ResolvedImageDiscoveryIssue] = []
+
+        let applicationFrameworks = discoverBundles(
+            in: applicationURL.appending(path: "Frameworks", directoryHint: .isDirectory),
+            pathExtension: "framework",
+            kind: .dynamicFramework,
+            relativeTo: applicationURL
+        )
+        images.append(contentsOf: applicationFrameworks.images)
+        issues.append(contentsOf: applicationFrameworks.issues)
+
+        let extensions = discoverBundles(
+            in: applicationURL.appending(path: "PlugIns", directoryHint: .isDirectory),
+            pathExtension: "appex",
+            kind: .appExtension,
+            relativeTo: applicationURL
+        )
+        images.append(contentsOf: extensions.images)
+        issues.append(contentsOf: extensions.issues)
+
+        for appExtension in extensions.images {
+            guard let bundlePath = appExtension.bundlePath else { continue }
+            let extensionFrameworks = discoverBundles(
+                in: URL(filePath: bundlePath, directoryHint: .isDirectory)
+                    .appending(path: "Frameworks", directoryHint: .isDirectory),
+                pathExtension: "framework",
+                kind: .dynamicFramework,
+                relativeTo: applicationURL
+            )
+            images.append(contentsOf: extensionFrameworks.images)
+            issues.append(contentsOf: extensionFrameworks.issues)
+        }
+
+        return (
+            images.sorted { $0.relativePath < $1.relativePath },
+            issues.sorted { $0.relativeBundlePath < $1.relativeBundlePath }
+        )
+    }
+
+    private func discoverBundles(
+        in directoryURL: URL,
+        pathExtension: String,
+        kind: ResolvedImageKind,
+        relativeTo rootBundleURL: URL
+    ) -> (images: [ResolvedImage], issues: [ResolvedImageDiscoveryIssue]) {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: directoryURL.path) else { return ([], []) }
+
+        let directoryValues = try? directoryURL.resourceValues(forKeys: [
+            .isDirectoryKey,
+            .isSymbolicLinkKey,
+        ])
+        guard directoryValues?.isDirectory == true, directoryValues?.isSymbolicLink != true else {
+            let path = relativePath(of: directoryURL, from: rootBundleURL)
+            return (
+                [],
+                [
+                    ResolvedImageDiscoveryIssue(
+                        kind: kind,
+                        relativeBundlePath: path,
+                        message: "Embedded image directory is not a safe directory."
+                    )
+                ]
+            )
+        }
+
+        let candidates: [URL]
+        do {
+            candidates = try fileManager.contentsOfDirectory(
+                at: directoryURL,
+                includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+                options: [.skipsHiddenFiles]
+            ).filter { $0.pathExtension.lowercased() == pathExtension }
+                .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        } catch {
+            let path = relativePath(of: directoryURL, from: rootBundleURL)
+            return (
+                [],
+                [
+                    ResolvedImageDiscoveryIssue(
+                        kind: kind,
+                        relativeBundlePath: path,
+                        message:
+                            "Embedded image directory could not be read: \(error.localizedDescription)"
+                    )
+                ]
+            )
+        }
+
+        var images: [ResolvedImage] = []
+        var issues: [ResolvedImageDiscoveryIssue] = []
+        for candidate in candidates {
+            let candidatePath = relativePath(of: candidate, from: rootBundleURL)
+            let values = try? candidate.resourceValues(forKeys: [
+                .isDirectoryKey,
+                .isSymbolicLinkKey,
+            ])
+            guard values?.isDirectory == true, values?.isSymbolicLink != true else {
+                issues.append(
+                    ResolvedImageDiscoveryIssue(
+                        kind: kind,
+                        relativeBundlePath: candidatePath,
+                        message: "Embedded image bundle is not a safe directory."
+                    ))
+                continue
+            }
+
+            do {
+                images.append(
+                    try resolveBundleImage(
+                        at: candidate,
+                        kind: kind,
+                        relativeTo: rootBundleURL
+                    ))
+            } catch {
+                issues.append(
+                    ResolvedImageDiscoveryIssue(
+                        kind: kind,
+                        relativeBundlePath: candidatePath,
+                        message: error.localizedDescription
+                    ))
+            }
+        }
+        return (images, issues)
+    }
+
+    private func relativePath(of itemURL: URL, from rootURL: URL) -> String {
+        let rootPath = rootURL.standardizedFileURL.path
+        let itemPath = itemURL.standardizedFileURL.path
+        let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        guard itemPath.hasPrefix(prefix) else { return itemURL.lastPathComponent }
+        return String(itemPath.dropFirst(prefix.count))
     }
 
     private func resolveMachO(at executableURL: URL) throws -> ResolvedTarget {

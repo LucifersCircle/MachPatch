@@ -1,5 +1,6 @@
 public struct ObjectiveCAnalysis: Codable, Equatable, Sendable {
     public let target: ResolvedTarget
+    public let image: ResolvedImage
     public let sliceIndex: Int
     public let architecture: MachOArchitecture
     public let backend: ObjectiveCAnalyzerBackend
@@ -8,6 +9,7 @@ public struct ObjectiveCAnalysis: Codable, Equatable, Sendable {
 
     public init(
         target: ResolvedTarget,
+        image: ResolvedImage? = nil,
         sliceIndex: Int,
         architecture: MachOArchitecture,
         backend: ObjectiveCAnalyzerBackend,
@@ -15,6 +17,7 @@ public struct ObjectiveCAnalysis: Codable, Equatable, Sendable {
         metadata: ObjectiveCMetadata
     ) {
         self.target = target
+        self.image = image ?? target.primaryImage
         self.sliceIndex = sliceIndex
         self.architecture = architecture
         self.backend = backend

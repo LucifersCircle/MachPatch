@@ -10,6 +10,7 @@ struct TargetSummaryView: View {
             VStack(alignment: .leading, spacing: 24) {
                 header
                 targetDetails
+                selectedImageDetails
                 architectureDetails
                 analysisDetails
                 if let report = loadedTarget.patchabilityReport {
@@ -123,13 +124,16 @@ struct TargetSummaryView: View {
                 Text(loadedTarget.inputURL.lastPathComponent)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
+                Text("Selected image: \(selectedImageDisplayName)")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
             Spacer()
         }
     }
 
     private var targetDetails: some View {
-        GroupBox("Target Summary") {
+        GroupBox("Host Target") {
             Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 12) {
                 detailRow("Input type", loadedTarget.target.sourceType.rawValue.uppercased())
                 detailRow("Executable", loadedTarget.target.executableName)
@@ -151,8 +155,45 @@ struct TargetSummaryView: View {
         }
     }
 
+    private var selectedImageDetails: some View {
+        let image = loadedTarget.inspection.image
+        let slices = loadedTarget.inspection.slices
+        let architectures = Array(Set(slices.map(\.architecture.rawValue))).sorted()
+        let encryption: String
+        if slices.isEmpty {
+            encryption = "Not available"
+        } else if slices.contains(where: \.encrypted) {
+            encryption = "Encrypted"
+        } else {
+            encryption = "Not encrypted"
+        }
+
+        return GroupBox("Selected Image") {
+            Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 12) {
+                detailRow("Kind", imageKindName(image.kind))
+                detailRow("Executable", image.executableName)
+                detailRow("Relative path", image.relativePath, monospaced: true)
+                detailRow("Bundle identifier", image.bundleIdentifier ?? "Not available")
+                detailRow(
+                    "Bundle metadata",
+                    image.hasBundleMetadata ? "Available" : "Not available"
+                )
+                detailRow("Minimum iOS", image.minimumOSVersion ?? "Not declared")
+                detailRow(
+                    "Architectures",
+                    architectures.isEmpty ? "Not available" : architectures.joined(separator: ", ")
+                )
+                detailRow("Encryption", encryption)
+                detailRow("SHA-256", image.sha256, monospaced: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 8)
+            .textSelection(.enabled)
+        }
+    }
+
     private var architectureDetails: some View {
-        GroupBox("Architectures") {
+        GroupBox("Selected Image Architectures") {
             VStack(alignment: .leading, spacing: 14) {
                 ForEach(loadedTarget.architectureReport.slices, id: \.index) { slice in
                     ArchitectureRow(slice: slice)
@@ -189,6 +230,7 @@ struct TargetSummaryView: View {
                     )
                     .foregroundStyle(.green)
                     LabeledContent("Selected slice", value: String(analysis.sliceIndex))
+                    LabeledContent("Image", value: analysis.image.executableName)
                     LabeledContent("Architecture", value: analysis.architecture.rawValue)
                     LabeledContent("Metadata backend", value: analysis.backend.rawValue)
                     ForEach(analysis.warnings, id: \.self) { warning in
@@ -231,6 +273,20 @@ struct TargetSummaryView: View {
 
     private var displayName: String {
         loadedTarget.target.displayName ?? loadedTarget.target.executableName
+    }
+
+    private var selectedImageDisplayName: String {
+        loadedTarget.inspection.image.displayName ?? loadedTarget.inspection.image.executableName
+    }
+
+    private func imageKindName(_ kind: ResolvedImageKind) -> String {
+        switch kind {
+        case .mainExecutable: "Main executable"
+        case .dynamicFramework: "Dynamic framework"
+        case .appExtension: "App extension"
+        case .standaloneFramework: "Standalone framework"
+        case .standaloneMachO: "Standalone Mach-O"
+        }
     }
 
     @ViewBuilder

@@ -2,15 +2,73 @@ import Foundation
 import MachPatchBuilder
 import MachPatchCore
 
+struct LoadedTargetImage: Equatable, Identifiable, Sendable {
+    let image: ResolvedImage
+    let inspectionState: TargetImageInspectionState
+
+    var id: String { image.id }
+}
+
+enum TargetImageInspectionState: Equatable, Sendable {
+    case available(slices: [MachOSlice], architectureReport: TargetArchitectureReport)
+    case failed(String)
+
+    var slices: [MachOSlice] {
+        guard case .available(let slices, _) = self else { return [] }
+        return slices
+    }
+
+    var architectureReport: TargetArchitectureReport? {
+        guard case .available(_, let report) = self else { return nil }
+        return report
+    }
+}
+
 struct LoadedTarget: Equatable, Sendable {
     let inputURL: URL
     let target: ResolvedTarget
     let inspection: MachOInspection
     let architectureReport: TargetArchitectureReport
+    let images: [LoadedTargetImage]
     let iconData: Data?
     let analysisState: TargetAnalysisState
     let patchabilityReport: ObjectiveCPatchabilityReport?
     let classBrowserTargets: [ObjectiveCClassBrowserTarget]
+
+    var selectedImage: LoadedTargetImage? {
+        images.first { $0.id == inspection.image.id }
+    }
+
+    init(
+        inputURL: URL,
+        target: ResolvedTarget,
+        inspection: MachOInspection,
+        architectureReport: TargetArchitectureReport,
+        images: [LoadedTargetImage]? = nil,
+        iconData: Data?,
+        analysisState: TargetAnalysisState,
+        patchabilityReport: ObjectiveCPatchabilityReport?,
+        classBrowserTargets: [ObjectiveCClassBrowserTarget]
+    ) {
+        self.inputURL = inputURL
+        self.target = target
+        self.inspection = inspection
+        self.architectureReport = architectureReport
+        self.images =
+            images ?? [
+                LoadedTargetImage(
+                    image: target.primaryImage,
+                    inspectionState: .available(
+                        slices: inspection.slices,
+                        architectureReport: architectureReport
+                    )
+                )
+            ]
+        self.iconData = iconData
+        self.analysisState = analysisState
+        self.patchabilityReport = patchabilityReport
+        self.classBrowserTargets = classBrowserTargets
+    }
 
     func replacingAnalysisState(
         _ state: TargetAnalysisState,
@@ -40,10 +98,36 @@ struct LoadedTarget: Equatable, Sendable {
             target: target,
             inspection: inspection,
             architectureReport: architectureReport,
+            images: images,
             iconData: iconData,
             analysisState: state,
             patchabilityReport: resolvedPatchabilityReport,
             classBrowserTargets: resolvedClassBrowserTargets
+        )
+    }
+
+    func selectingImage(
+        id imageID: String,
+        analysisState: TargetAnalysisState
+    ) -> LoadedTarget? {
+        guard let selectedImage = images.first(where: { $0.id == imageID }),
+            case .available(let slices, let report) = selectedImage.inspectionState
+        else { return nil }
+
+        return LoadedTarget(
+            inputURL: inputURL,
+            target: target,
+            inspection: MachOInspection(
+                target: target,
+                image: selectedImage.image,
+                slices: slices
+            ),
+            architectureReport: report,
+            images: images,
+            iconData: iconData,
+            analysisState: analysisState,
+            patchabilityReport: nil,
+            classBrowserTargets: []
         )
     }
 }

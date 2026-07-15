@@ -24,7 +24,7 @@ public enum InputResolutionError: Error, Equatable, LocalizedError, Sendable {
         case .pathDoesNotExist(let path):
             "Input does not exist: \(path)"
         case .unsupportedInput(let path):
-            "Unsupported input. Expected an IPA, .app directory, or Mach-O executable: \(path)"
+            "Unsupported input. Expected an IPA, .app or .framework directory, or Mach-O executable: \(path)"
         case .inputIsSymbolicLink(let path):
             "Symbolic-link inputs are not accepted: \(path)"
         case .missingPayload:
@@ -36,7 +36,7 @@ public enum InputResolutionError: Error, Equatable, LocalizedError, Sendable {
         case .invalidApplicationBundle(let path):
             "The application bundle is invalid: \(path)"
         case .missingInfoPlist(let path):
-            "The application bundle does not contain Info.plist: \(path)"
+            "The bundle does not contain Info.plist: \(path)"
         case .unreadableInfoPlist(let reason):
             "Info.plist could not be read: \(reason)"
         case .missingBundleExecutable(let path):

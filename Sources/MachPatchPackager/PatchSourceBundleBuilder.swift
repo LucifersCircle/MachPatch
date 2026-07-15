@@ -106,6 +106,8 @@ public struct PatchSourceBundleBuilder: Sendable {
         - Bundle identifier: \(project.target.bundleIdentifier ?? "Not recorded")
         - Executable: \(project.target.executableName)
         - SHA-256: `\(project.target.executableSHA256)`
+        - Selected image: \(project.target.selectedImage.relativePath) (\(project.target.selectedImage.kind.rawValue))
+        - Selected image SHA-256: `\(project.target.selectedImage.executableSHA256)`
         - Recorded slice: \(project.target.selectedSlice.architecture.rawValue), CPU subtype \(project.target.selectedSlice.cpuSubtype)
 
         `MachPatchGenerated.m` is deterministic generated source. Edit `patch.json` in MachPatch and export a new source bundle instead of hand-editing generated code.

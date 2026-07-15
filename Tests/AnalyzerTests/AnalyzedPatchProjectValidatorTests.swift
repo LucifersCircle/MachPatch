@@ -142,6 +142,48 @@ final class AnalyzedPatchProjectValidatorTests: XCTestCase {
         XCTAssertTrue(report.errors.contains { $0.code == .targetCPUSubtypeMismatch })
     }
 
+    func testDuplicateClassNameCannotRetargetPatchToAnotherImage() throws {
+        let fixture = try FixtureAnalysis()
+        defer { fixture.remove() }
+        let frameworkImage = ResolvedImage(
+            id: "dynamicFramework:Frameworks/FixtureKit.framework/FixtureKit",
+            kind: .dynamicFramework,
+            relativePath: "Frameworks/FixtureKit.framework/FixtureKit",
+            bundlePath: "/Fixture.app/Frameworks/FixtureKit.framework",
+            bundleIdentifier: "com.example.fixture-kit",
+            displayName: "FixtureKit",
+            minimumOSVersion: "15.0",
+            supportedPlatforms: ["iPhoneOS"],
+            executableName: "FixtureKit",
+            executablePath: fixture.analysis.target.executablePath,
+            sha256: String(repeating: "d", count: 64)
+        )
+        let frameworkAnalysis = ObjectiveCAnalysis(
+            target: fixture.analysis.target,
+            image: frameworkImage,
+            sliceIndex: fixture.analysis.sliceIndex,
+            architecture: fixture.analysis.architecture,
+            backend: fixture.analysis.backend,
+            warnings: [],
+            metadata: fixture.analysis.metadata
+        )
+        let slice = try XCTUnwrap(
+            MachOInspector().inspect(at: fixture.analysis.target.executableURL).first
+        )
+
+        let report = AnalyzedPatchProjectValidator.validate(
+            makeProject(),
+            against: frameworkAnalysis,
+            selectedSlice: slice
+        )
+
+        XCTAssertFalse(report.isValid)
+        XCTAssertTrue(report.errors.contains { $0.code == .targetImagePathMismatch })
+        XCTAssertTrue(report.errors.contains { $0.code == .targetImageNameMismatch })
+        XCTAssertTrue(report.warnings.contains { $0.code == .targetImageHashMismatch })
+        XCTAssertFalse(report.errors.contains { $0.code == .classNotFound })
+    }
+
     func testSelectsTheExactArchitectureAndSubtypeFromFatBinary() throws {
         let arm64 = MachOFixtureFactory.thin64(cpuSubtype: 0, cryptID: 0)
         let arm64e = MachOFixtureFactory.thin64(cpuSubtype: 0x8000_0002, cryptID: 0)

@@ -19,7 +19,15 @@ public struct ObjectiveCAnalyzer: Sendable {
         _ target: ResolvedTarget,
         sliceIndex: Int = 0
     ) throws -> ObjectiveCAnalysis {
-        let slices = try MachOInspector().inspect(at: target.executableURL)
+        try analyze(target, image: target.primaryImage, sliceIndex: sliceIndex)
+    }
+
+    public func analyze(
+        _ target: ResolvedTarget,
+        image: ResolvedImage,
+        sliceIndex: Int = 0
+    ) throws -> ObjectiveCAnalysis {
+        let slices = try MachOInspector().inspect(at: image.executableURL)
         guard !slices.isEmpty else { throw ObjectiveCAnalyzerError.noSlices }
         guard slices.indices.contains(sliceIndex) else {
             throw ObjectiveCAnalyzerError.sliceIndexOutOfRange(sliceIndex)
@@ -45,18 +53,19 @@ public struct ObjectiveCAnalyzer: Sendable {
 
             do {
                 let rawMetadata = try provider.extractMetadata(
-                    from: target.executableURL,
+                    from: image.executableURL,
                     slice: slice
                 )
                 return ObjectiveCAnalysis(
                     target: target,
+                    image: image,
                     sliceIndex: sliceIndex,
                     architecture: slice.architecture,
                     backend: provider.backend,
                     warnings: warnings,
                     metadata: ObjectiveCMetadataNormalizer.normalize(
                         rawMetadata,
-                        imageName: target.executableName
+                        imageName: image.executableName
                     )
                 )
             } catch {

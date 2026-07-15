@@ -71,6 +71,63 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertEqual(analyzedTarget.classBrowserTargets.count, 2)
     }
 
+    func testSelectingEmbeddedImageLoadsItAndBindsProjectIdentity() async throws {
+        let loadedTarget = makeLoadedTargetWithFramework()
+        let frameworkImage = try XCTUnwrap(
+            loadedTarget.images.first(where: { $0.image.kind == .dynamicFramework })?.image
+        )
+        let baseAnalysis = makeAnalysis(for: loadedTarget)
+        let frameworkAnalysis = ObjectiveCAnalysis(
+            target: loadedTarget.target,
+            image: frameworkImage,
+            sliceIndex: 0,
+            architecture: baseAnalysis.architecture,
+            backend: baseAnalysis.backend,
+            warnings: [],
+            metadata: baseAnalysis.metadata
+        )
+        let model = WorkspaceModel(
+            loader: SuccessfulLoader(target: loadedTarget, analysis: frameworkAnalysis)
+        )
+
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+        model.selectImage(id: frameworkImage.id)
+        await waitForAnalysisToFinish(model)
+
+        XCTAssertEqual(model.analysis?.image, frameworkImage)
+        XCTAssertEqual(
+            model.currentTargetIdentity?.selectedImage, PatchImageIdentity(image: frameworkImage))
+        XCTAssertEqual(
+            model.patchProject?.target.selectedImage, PatchImageIdentity(image: frameworkImage))
+        XCTAssertEqual(model.patchProject?.projectName, "FixtureKit Patch")
+        XCTAssertEqual(model.patchProject?.build.outputName, "FixtureKitPatch")
+    }
+
+    func testEmbeddedImageArchitectureDoesNotReuseSupportedHostArchitecture() async throws {
+        let loadedTarget = makeLoadedTargetWithFramework(frameworkPlatform: .iPhoneSimulator)
+        let frameworkImage = try XCTUnwrap(
+            loadedTarget.images.first(where: { $0.image.kind == .dynamicFramework })?.image
+        )
+        let model = WorkspaceModel(loader: SuccessfulLoader(target: loadedTarget))
+
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+        model.selectImage(id: frameworkImage.id)
+
+        guard case .loaded(let selectedTarget) = model.phase else {
+            return XCTFail("Expected the target to remain loaded")
+        }
+        XCTAssertEqual(selectedTarget.inspection.image, frameworkImage)
+        XCTAssertTrue(
+            selectedTarget.architectureReport.slices.allSatisfy { !$0.supportedForPatching })
+        guard case .unavailable = selectedTarget.analysisState else {
+            return XCTFail("Expected simulator-only image analysis to be unavailable")
+        }
+        XCTAssertNil(model.analysis)
+        XCTAssertNil(model.patchProject)
+    }
+
     func testClassFiltersSearchMethodsAndSelection() async throws {
         let target = makeLoadedTarget()
         let analysis = makeAnalysis(for: target)
@@ -968,6 +1025,7 @@ final class WorkspaceModelTests: XCTestCase {
                 bundleIdentifier: currentProject.target.bundleIdentifier,
                 executableName: currentProject.target.executableName,
                 executableSHA256: String(repeating: "b", count: 64),
+                selectedImage: currentProject.target.selectedImage,
                 selectedSlice: currentProject.target.selectedSlice,
                 minimumIOSVersion: currentProject.target.minimumIOSVersion
             ),
@@ -1146,6 +1204,96 @@ final class WorkspaceModelTests: XCTestCase {
         )
     }
 
+    private func makeLoadedTargetWithFramework(
+        frameworkPlatform: MachOPlatform = .iPhoneOS
+    ) -> LoadedTarget {
+        let base = makeLoadedTarget()
+        let framework = ResolvedImage(
+            id: "dynamicFramework:Frameworks/FixtureKit.framework/FixtureKit",
+            kind: .dynamicFramework,
+            relativePath: "Frameworks/FixtureKit.framework/FixtureKit",
+            bundlePath: "/tmp/Fixture.app/Frameworks/FixtureKit.framework",
+            bundleIdentifier: "com.example.fixture-kit",
+            displayName: "FixtureKit",
+            minimumOSVersion: "15.0",
+            supportedPlatforms: ["iPhoneOS"],
+            executableName: "FixtureKit",
+            executablePath: "/tmp/Fixture.app/Frameworks/FixtureKit.framework/FixtureKit",
+            sha256: String(repeating: "b", count: 64)
+        )
+        let target = ResolvedTarget(
+            sourceType: base.target.sourceType,
+            sourcePath: base.target.sourcePath,
+            bundlePath: base.target.bundlePath,
+            bundleIdentifier: base.target.bundleIdentifier,
+            displayName: base.target.displayName,
+            minimumOSVersion: base.target.minimumOSVersion,
+            supportedPlatforms: base.target.supportedPlatforms,
+            executableName: base.target.executableName,
+            executablePath: base.target.executablePath,
+            sha256: base.target.sha256,
+            images: [base.target.primaryImage, framework]
+        )
+        let inspection = MachOInspection(
+            target: target,
+            image: target.primaryImage,
+            slices: base.inspection.slices
+        )
+        let report = ArchitectureResolver.report(for: inspection.slices)
+        let hostSlice = inspection.slices[0]
+        let frameworkSlice = MachOSlice(
+            index: hostSlice.index,
+            architecture: hostSlice.architecture,
+            cpuType: hostSlice.cpuType,
+            cpuSubtype: hostSlice.cpuSubtype,
+            cpuSubtypeBase: hostSlice.cpuSubtypeBase,
+            cpuSubtypeCapabilities: hostSlice.cpuSubtypeCapabilities,
+            fileType: .dynamicLibrary,
+            fileTypeValue: 6,
+            endianness: hostSlice.endianness,
+            is64Bit: hostSlice.is64Bit,
+            platform: frameworkPlatform,
+            platformValue: frameworkPlatform == .iPhoneOS ? 2 : 7,
+            minimumOSVersion: hostSlice.minimumOSVersion,
+            sdkVersion: hostSlice.sdkVersion,
+            encrypted: hostSlice.encrypted,
+            encryptionCryptID: hostSlice.encryptionCryptID,
+            encryptionOffset: hostSlice.encryptionOffset,
+            encryptionSize: hostSlice.encryptionSize,
+            fileOffset: hostSlice.fileOffset,
+            fileSize: hostSlice.fileSize,
+            installName: "@rpath/FixtureKit.framework/FixtureKit",
+            linkedLibraries: hostSlice.linkedLibraries
+        )
+        let frameworkReport = ArchitectureResolver.report(for: [frameworkSlice])
+        return LoadedTarget(
+            inputURL: base.inputURL,
+            target: target,
+            inspection: inspection,
+            architectureReport: report,
+            images: [
+                LoadedTargetImage(
+                    image: target.primaryImage,
+                    inspectionState: .available(
+                        slices: inspection.slices,
+                        architectureReport: report
+                    )
+                ),
+                LoadedTargetImage(
+                    image: framework,
+                    inspectionState: .available(
+                        slices: [frameworkSlice],
+                        architectureReport: frameworkReport
+                    )
+                ),
+            ],
+            iconData: base.iconData,
+            analysisState: .requiresSliceSelection,
+            patchabilityReport: nil,
+            classBrowserTargets: []
+        )
+    }
+
     private func makeAnalysis(for target: LoadedTarget) -> ObjectiveCAnalysis {
         ObjectiveCAnalysis(
             target: target.target,
@@ -1220,7 +1368,9 @@ private struct SuccessfulLoader: TargetLoading {
 
     func loadAnalysis(
         at inputURL: URL,
-        expectedSHA256: String,
+        expectedHostSHA256: String,
+        imageID: String,
+        expectedImageSHA256: String,
         sliceIndex: Int
     ) async throws -> LoadedObjectiveCAnalysis {
         guard let analysis else { throw StubError.failed }
@@ -1379,7 +1529,9 @@ private struct FailingLoader: TargetLoading {
 
     func loadAnalysis(
         at inputURL: URL,
-        expectedSHA256: String,
+        expectedHostSHA256: String,
+        imageID: String,
+        expectedImageSHA256: String,
         sliceIndex: Int
     ) async throws -> LoadedObjectiveCAnalysis {
         throw StubError.failed

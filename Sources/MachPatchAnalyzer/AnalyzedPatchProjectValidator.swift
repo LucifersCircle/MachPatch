@@ -2,11 +2,36 @@ import Foundation
 import MachPatchCore
 
 public enum AnalyzedPatchProjectValidator {
+    public static func selectedImage(
+        for project: PatchProject,
+        in target: ResolvedTarget
+    ) throws -> ResolvedImage {
+        if project.target.selectedImage.kind == .mainExecutable,
+            project.target.selectedImage.relativePath == target.primaryImage.relativePath,
+            project.target.selectedImage.executableName == target.primaryImage.executableName
+        {
+            return target.primaryImage
+        }
+        guard
+            let image = target.images.first(where: {
+                $0.kind == project.target.selectedImage.kind
+                    && $0.relativePath == project.target.selectedImage.relativePath
+                    && $0.executableName == project.target.selectedImage.executableName
+            })
+        else {
+            throw AnalyzedPatchProjectValidationError.selectedImageNotFound(
+                project.target.selectedImage.relativePath
+            )
+        }
+        return image
+    }
+
     public static func selectedSliceIndex(
         for project: PatchProject,
         in target: ResolvedTarget
     ) throws -> Int {
-        let slices = try MachOInspector().inspect(at: target.executableURL)
+        let image = try selectedImage(for: project, in: target)
+        let slices = try MachOInspector().inspect(at: image.executableURL)
         let matches = slices.filter {
             $0.architecture == project.target.selectedSlice.architecture
                 && $0.cpuSubtype == project.target.selectedSlice.cpuSubtype
@@ -30,7 +55,7 @@ public enum AnalyzedPatchProjectValidator {
         _ project: PatchProject,
         against analysis: ObjectiveCAnalysis
     ) throws -> PatchProjectValidationReport {
-        let slices = try MachOInspector().inspect(at: analysis.target.executableURL)
+        let slices = try MachOInspector().inspect(at: analysis.image.executableURL)
         guard slices.indices.contains(analysis.sliceIndex) else {
             throw ObjectiveCAnalyzerError.sliceIndexOutOfRange(analysis.sliceIndex)
         }
@@ -93,6 +118,39 @@ public enum AnalyzedPatchProjectValidator {
                 issue(
                     .targetBundleIdentifierMismatch,
                     "Bundle identifier changed from '\(expectedBundleIdentifier)' to '\(analysis.target.bundleIdentifier ?? "(none)")'."
+                )
+            )
+        }
+        let legacyPrimaryImageMatch =
+            project.target.selectedImage.kind == .mainExecutable
+            && analysis.image.id == analysis.target.primaryImage.id
+            && project.target.selectedImage.relativePath == analysis.image.relativePath
+        if !legacyPrimaryImageMatch
+            && (project.target.selectedImage.kind != analysis.image.kind
+                || project.target.selectedImage.relativePath != analysis.image.relativePath)
+        {
+            errors.append(
+                issue(
+                    .targetImagePathMismatch,
+                    "Selected image changed from '\(project.target.selectedImage.relativePath)' to '\(analysis.image.relativePath)'."
+                )
+            )
+        }
+        if project.target.selectedImage.executableName != analysis.image.executableName {
+            errors.append(
+                issue(
+                    .targetImageNameMismatch,
+                    "Selected image name changed from '\(project.target.selectedImage.executableName)' to '\(analysis.image.executableName)'."
+                )
+            )
+        }
+        if project.target.selectedImage.executableSHA256.caseInsensitiveCompare(
+            analysis.image.sha256
+        ) != .orderedSame {
+            warnings.append(
+                issue(
+                    .targetImageHashMismatch,
+                    "The analyzed image differs from the image recorded by the project."
                 )
             )
         }
@@ -203,11 +261,14 @@ public enum AnalyzedPatchProjectValidator {
 }
 
 public enum AnalyzedPatchProjectValidationError: Error, Equatable, LocalizedError, Sendable {
+    case selectedImageNotFound(String)
     case selectedSliceNotFound(MachOArchitecture, Int32)
     case ambiguousSelectedSlice(MachOArchitecture, Int32)
 
     public var errorDescription: String? {
         switch self {
+        case .selectedImageNotFound(let relativePath):
+            "Target does not contain the selected image: \(relativePath)"
         case .selectedSliceNotFound(let architecture, let cpuSubtype):
             "Target does not contain the selected \(architecture.rawValue) CPU subtype \(cpuSubtype) slice."
         case .ambiguousSelectedSlice(let architecture, let cpuSubtype):

@@ -26,6 +26,13 @@
     "executableName" : "Fixture",
     "executableSHA256" : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "minimumIOSVersion" : "15.0",
+    "selectedImage" : {
+      "bundleIdentifier" : "com.example.fixture",
+      "executableName" : "Fixture",
+      "executableSHA256" : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kind" : "mainExecutable",
+      "relativePath" : "Fixture"
+    },
     "selectedSlice" : {
       "architecture" : "arm64",
       "cpuSubtype" : 0

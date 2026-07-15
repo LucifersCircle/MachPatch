@@ -2,10 +2,16 @@ import Foundation
 
 public struct MachOInspection: Codable, Equatable, Sendable {
     public let target: ResolvedTarget
+    public let image: ResolvedImage
     public let slices: [MachOSlice]
 
-    public init(target: ResolvedTarget, slices: [MachOSlice]) {
+    public init(
+        target: ResolvedTarget,
+        image: ResolvedImage? = nil,
+        slices: [MachOSlice]
+    ) {
         self.target = target
+        self.image = image ?? target.primaryImage
         self.slices = slices
     }
 }

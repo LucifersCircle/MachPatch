@@ -12,13 +12,16 @@ The top-level object contains:
 
 - `formatVersion`: must be `1`;
 - `projectName`: user-visible project name;
-- `target`: immutable identity of the executable and selected Mach-O slice used to create it;
+- `target`: immutable host, selected-image, and selected Mach-O slice identity;
 - `build`: requested architecture mode, deployment target, output name, and ARC setting;
 - `patches`: ordered method-patch definitions.
 
-Target identity records the bundle identifier when available, executable name and SHA-256,
-minimum iOS version, architecture, and raw CPU subtype. A changed hash, name, bundle identifier,
-or minimum OS is reported as a retargeting warning. A missing architecture/subtype is an error.
+Target identity records the host bundle identifier, executable name, and SHA-256 separately from
+the selected image's kind, relative path, bundle identifier, executable name, and SHA-256. It also
+records the minimum iOS version, architecture, and raw CPU subtype. A changed host or same-path
+image hash is a retargeting warning. Selecting a different image path or name is an error even if
+that image exposes an identical Objective-C class and selector. Version 1 projects written before
+the `selectedImage` field existed decode it as the primary executable for compatibility.
 
 Each patch records a UUID string, enabled state, exact class and selector, instance/class method
 kind, raw expected type encoding, and typed action. Duplicate IDs or duplicate method targets are

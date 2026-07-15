@@ -36,6 +36,9 @@ public enum PatchProjectValidationCode: String, Codable, Equatable, Sendable {
     case emptyProjectName
     case emptyExecutableName
     case invalidExecutableSHA256
+    case emptySelectedImagePath
+    case emptySelectedImageName
+    case invalidSelectedImageSHA256
     case invalidMinimumIOSVersion
     case invalidOutputName
     case invalidPatchID
@@ -62,6 +65,9 @@ public enum PatchProjectValidationCode: String, Codable, Equatable, Sendable {
     case targetHashMismatch
     case targetExecutableNameMismatch
     case targetBundleIdentifierMismatch
+    case targetImagePathMismatch
+    case targetImageNameMismatch
+    case targetImageHashMismatch
     case targetMinimumIOSVersionMismatch
     case targetArchitectureMismatch
     case targetCPUSubtypeMismatch
@@ -95,6 +101,24 @@ public enum PatchProjectValidator {
                 issue(
                     .invalidExecutableSHA256,
                     "Target executable SHA-256 must contain exactly 64 hexadecimal characters."
+                )
+            )
+        }
+        if isBlank(project.target.selectedImage.relativePath) {
+            errors.append(
+                issue(.emptySelectedImagePath, "Selected image path must not be empty.")
+            )
+        }
+        if isBlank(project.target.selectedImage.executableName) {
+            errors.append(
+                issue(.emptySelectedImageName, "Selected image name must not be empty.")
+            )
+        }
+        if !isSHA256(project.target.selectedImage.executableSHA256) {
+            errors.append(
+                issue(
+                    .invalidSelectedImageSHA256,
+                    "Selected image SHA-256 must contain exactly 64 hexadecimal characters."
                 )
             )
         }

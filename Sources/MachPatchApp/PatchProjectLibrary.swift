@@ -10,15 +10,26 @@ struct SavedPatchProject: Identifiable, Equatable, Sendable {
 
     var id: URL { fileURL }
 
-    var targetExecutableName: String { target.executableName }
+    var targetExecutableName: String { target.selectedImage.executableName }
 
     func isRelevant(to currentTarget: PatchTargetIdentity) -> Bool {
         guard target.executableName == currentTarget.executableName,
+            target.selectedImage.kind == currentTarget.selectedImage.kind,
+            target.selectedImage.relativePath == currentTarget.selectedImage.relativePath,
+            target.selectedImage.executableName == currentTarget.selectedImage.executableName,
             target.selectedSlice == currentTarget.selectedSlice
         else { return false }
 
-        if target.executableSHA256.caseInsensitiveCompare(currentTarget.executableSHA256)
+        if target.selectedImage.executableSHA256.caseInsensitiveCompare(
+            currentTarget.selectedImage.executableSHA256
+        )
             == .orderedSame
+        {
+            return true
+        }
+        if let savedImageBundleIdentifier = target.selectedImage.bundleIdentifier,
+            let currentImageBundleIdentifier = currentTarget.selectedImage.bundleIdentifier,
+            savedImageBundleIdentifier == currentImageBundleIdentifier
         {
             return true
         }
@@ -32,6 +43,7 @@ struct SavedPatchProject: Identifiable, Equatable, Sendable {
         target.executableSHA256.caseInsensitiveCompare(currentTarget.executableSHA256)
             == .orderedSame
             && target.executableName == currentTarget.executableName
+            && target.selectedImage == currentTarget.selectedImage
             && target.selectedSlice == currentTarget.selectedSlice
     }
 }

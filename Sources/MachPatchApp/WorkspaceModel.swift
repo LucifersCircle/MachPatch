@@ -148,12 +148,15 @@ final class WorkspaceModel: ObservableObject {
             do {
                 let loadedAnalysis = try await loader.loadAnalysis(
                     at: loadedTarget.inputURL,
-                    expectedSHA256: loadedTarget.target.sha256,
+                    expectedHostSHA256: loadedTarget.target.sha256,
+                    imageID: loadedTarget.inspection.image.id,
+                    expectedImageSHA256: loadedTarget.inspection.image.sha256,
                     sliceIndex: sliceIndex
                 )
                 try Task.checkCancellation()
                 guard case .loaded(let currentTarget) = self?.phase,
-                    currentTarget.target.sha256 == loadedTarget.target.sha256
+                    currentTarget.target.sha256 == loadedTarget.target.sha256,
+                    currentTarget.inspection.image.id == loadedTarget.inspection.image.id
                 else { return }
                 let analysis = loadedAnalysis.analysis
                 let analyzedTarget = currentTarget.replacingAnalysisState(
@@ -171,7 +174,8 @@ final class WorkspaceModel: ObservableObject {
             } catch {
                 guard !Task.isCancelled else { return }
                 guard case .loaded(let currentTarget) = self?.phase,
-                    currentTarget.target.sha256 == loadedTarget.target.sha256
+                    currentTarget.target.sha256 == loadedTarget.target.sha256,
+                    currentTarget.inspection.image.id == loadedTarget.inspection.image.id
                 else { return }
                 self?.phase = .loaded(
                     currentTarget.replacingAnalysisState(
@@ -181,6 +185,69 @@ final class WorkspaceModel: ObservableObject {
                     )
                 )
             }
+        }
+    }
+
+    func selectImage(id imageID: String) {
+        guard case .loaded(let loadedTarget) = phase else { return }
+        guard loadedTarget.inspection.image.id != imageID else {
+            navigation = .target
+            return
+        }
+        guard projectDraft?.patches.isEmpty != false else {
+            workspaceAlert = WorkspaceAlert(
+                title: "Patch Project Is In Use",
+                message:
+                    "Save or export the current patch project, then start a new patch before selecting another image."
+            )
+            return
+        }
+        guard let image = loadedTarget.images.first(where: { $0.id == imageID }) else {
+            workspaceAlert = WorkspaceAlert(
+                title: "Image Unavailable",
+                message: "The selected image is no longer part of this target."
+            )
+            return
+        }
+        guard case .available(_, let architectureReport) = image.inspectionState else {
+            if case .failed(let message) = image.inspectionState {
+                workspaceAlert = WorkspaceAlert(
+                    title: "Image Inspection Failed",
+                    message: message
+                )
+            }
+            return
+        }
+
+        resetBuildState(removingArtifact: true)
+        analysisTask?.cancel()
+        navigation = .target
+        selectedMethodID = nil
+        methodRevealRequest = nil
+        classSearch = ""
+        classFilter = .all
+        savedProjectBaseline = nil
+        replaceProjectDraft(nil)
+
+        let supportedSlices = architectureReport.slices.filter(\.supportedForPatching)
+        let initialState: TargetAnalysisState
+        if supportedSlices.isEmpty {
+            initialState = .unavailable(architectureReport.automaticReason)
+        } else if supportedSlices.count == 1, let slice = supportedSlices.first {
+            initialState = .loading(sliceIndex: slice.index)
+        } else {
+            initialState = .requiresSliceSelection
+        }
+        guard
+            let selectedTarget = loadedTarget.selectingImage(
+                id: imageID,
+                analysisState: initialState
+            )
+        else { return }
+        phase = .loaded(selectedTarget)
+
+        if supportedSlices.count == 1, let slice = supportedSlices.first {
+            selectArchitecture(sliceIndex: slice.index)
         }
     }
 
