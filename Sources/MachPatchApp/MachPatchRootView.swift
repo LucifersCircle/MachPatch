@@ -17,14 +17,45 @@ struct MachPatchRootView: View {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
                     Button {
-                        model.chooseProject()
+                        model.savePatch()
                     } label: {
-                        Label("Open Patch Project…", systemImage: "doc")
+                        Label("Save Patch", systemImage: "tray.and.arrow.down.fill")
+                    }
+                    .disabled(model.projectDraft == nil)
+
+                    Menu {
+                        if model.savedPatchProjects.isEmpty {
+                            Text("No Saved Patches")
+                        } else {
+                            ForEach(model.savedPatchProjects) { savedProject in
+                                Button {
+                                    model.loadPatch(savedProject)
+                                } label: {
+                                    Label(
+                                        savedPatchLabel(savedProject),
+                                        systemImage: "hammer"
+                                    )
+                                }
+                                .help(
+                                    "\(savedProject.targetExecutableName) · \(savedProject.patchCount) patch\(savedProject.patchCount == 1 ? "" : "es")"
+                                )
+                            }
+                        }
+                    } label: {
+                        Label("Load Patch", systemImage: "tray.full")
+                    }
+
+                    Divider()
+
+                    Button {
+                        model.importPatch()
+                    } label: {
+                        Label("Import Patch…", systemImage: "square.and.arrow.down.on.square")
                     }
                     Button {
-                        model.saveProject()
+                        model.exportPatch()
                     } label: {
-                        Label("Save Patch Project…", systemImage: "square.and.arrow.down")
+                        Label("Export Patch…", systemImage: "square.and.arrow.up")
                     }
                     .disabled(model.projectDraft == nil)
                 } label: {
@@ -126,6 +157,11 @@ struct MachPatchRootView: View {
         } message: { pending in
             Text(pending.warnings.map(\.message).joined(separator: "\n"))
         }
+    }
+
+    private func savedPatchLabel(_ savedProject: SavedPatchProject) -> String {
+        let suffix = savedProject.patchCount == 1 ? "patch" : "patches"
+        return "\(savedProject.projectName) · \(savedProject.patchCount) \(suffix)"
     }
 }
 

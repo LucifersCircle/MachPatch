@@ -17,6 +17,7 @@ final class WorkspaceModel: ObservableObject {
     @Published var classSearch = ""
     @Published var classFilter: ObjectiveCClassFilter = .all
     @Published private(set) var projectDraft: PatchProjectDraft?
+    @Published private(set) var savedPatchProjects: [SavedPatchProject] = []
     @Published var isProjectImporterPresented = false
     @Published var isProjectExporterPresented = false
     @Published var isDylibExporterPresented = false
@@ -36,6 +37,7 @@ final class WorkspaceModel: ObservableObject {
     private let loader: any TargetLoading
     private let buildService: any PatchBuildServicing
     private let verificationService: any PatchVerificationServicing
+    private let projectLibrary: any PatchProjectLibraryServicing
     private var loadTask: Task<Void, Never>?
     private var analysisTask: Task<Void, Never>?
     private var projectTask: Task<Void, Never>?
@@ -45,18 +47,21 @@ final class WorkspaceModel: ObservableObject {
     init(
         loader: any TargetLoading = TargetLoader(),
         buildService: any PatchBuildServicing = PatchBuildService(),
-        verificationService: any PatchVerificationServicing = PatchVerificationService()
+        verificationService: any PatchVerificationServicing = PatchVerificationService(),
+        projectLibrary: any PatchProjectLibraryServicing = PatchProjectLibrary()
     ) {
         self.loader = loader
         self.buildService = buildService
         self.verificationService = verificationService
+        self.projectLibrary = projectLibrary
+        refreshSavedPatchProjects(reportErrors: false)
     }
 
     func chooseTarget() {
         isImporterPresented = true
     }
 
-    func chooseProject() {
+    func importPatch() {
         isProjectImporterPresented = true
     }
 
@@ -267,7 +272,7 @@ final class WorkspaceModel: ObservableObject {
         "\(projectDraft?.outputName ?? "MachPatch").deb"
     }
 
-    func saveProject() {
+    func exportPatch() {
         guard let projectDraft else {
             workspaceAlert = WorkspaceAlert(
                 title: "No Patch Project",
@@ -286,10 +291,51 @@ final class WorkspaceModel: ObservableObject {
         isProjectExporterPresented = true
     }
 
+    func savePatch() {
+        guard let projectDraft else {
+            workspaceAlert = WorkspaceAlert(
+                title: "No Patch Project",
+                message: "Choose and analyze a target before saving a patch."
+            )
+            return
+        }
+        let report = projectDraft.validationReport
+        guard report.isValid else {
+            workspaceAlert = WorkspaceAlert(
+                title: "Project Has Validation Errors",
+                message: report.errors.map(\.message).joined(separator: "\n")
+            )
+            return
+        }
+
+        do {
+            let savedProject = try projectLibrary.save(projectDraft.project)
+            refreshSavedPatchProjects(reportErrors: false)
+            workspaceAlert = WorkspaceAlert(
+                title: "Patch Saved",
+                message:
+                    "Saved \(savedProject.projectName) to MachPatch’s private patch library."
+            )
+        } catch {
+            workspaceAlert = WorkspaceAlert(
+                title: "Couldn’t Save Patch",
+                message: error.localizedDescription
+            )
+        }
+    }
+
+    func loadPatch(_ savedProject: SavedPatchProject) {
+        openProject(at: savedProject.fileURL)
+    }
+
+    func refreshSavedPatchProjects() {
+        refreshSavedPatchProjects(reportErrors: true)
+    }
+
     func handleProjectExport(_ result: Result<URL, any Error>) {
         if case .failure(let error) = result {
             workspaceAlert = WorkspaceAlert(
-                title: "Couldn’t Save Project",
+                title: "Couldn’t Export Patch",
                 message: error.localizedDescription
             )
         }
@@ -678,6 +724,20 @@ final class WorkspaceModel: ObservableObject {
         targetOverride: PatchTargetIdentity? = nil
     ) {
         replaceProjectDraft(PatchProjectDraft(project: project, targetOverride: targetOverride))
+    }
+
+    private func refreshSavedPatchProjects(reportErrors: Bool) {
+        do {
+            savedPatchProjects = try projectLibrary.savedProjects()
+        } catch {
+            savedPatchProjects = []
+            if reportErrors {
+                workspaceAlert = WorkspaceAlert(
+                    title: "Couldn’t Read Saved Patches",
+                    message: error.localizedDescription
+                )
+            }
+        }
     }
 
     private nonisolated static func readProject(at projectURL: URL) async throws -> PatchProject {

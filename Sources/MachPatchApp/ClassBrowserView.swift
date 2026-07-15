@@ -387,6 +387,8 @@ private struct PatchEditorView: View {
     @ObservedObject var model: WorkspaceModel
 
     @State private var editorError: String?
+    @State private var availableActionsExpanded = false
+    @State private var unavailableActionsExpanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -422,7 +424,10 @@ private struct PatchEditorView: View {
             }
 
             if !allowedActions.isEmpty {
-                DisclosureGroup("Available Actions") {
+                actionDisclosure(
+                    "Available Actions",
+                    isExpanded: $availableActionsExpanded
+                ) {
                     VStack(alignment: .leading, spacing: 7) {
                         ForEach(allowedActions, id: \.rawValue) { kind in
                             VStack(alignment: .leading, spacing: 2) {
@@ -435,11 +440,13 @@ private struct PatchEditorView: View {
                     }
                     .padding(.top, 6)
                 }
-                .font(.caption)
             }
 
             if !unavailableActions.isEmpty {
-                DisclosureGroup("Unavailable Actions") {
+                actionDisclosure(
+                    "Unavailable Actions",
+                    isExpanded: $unavailableActionsExpanded
+                ) {
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(unavailableActions, id: \.rawValue) { kind in
                             VStack(alignment: .leading, spacing: 2) {
@@ -458,9 +465,39 @@ private struct PatchEditorView: View {
                     }
                     .padding(.top, 6)
                 }
-                .font(.caption)
             }
         }
+    }
+
+    private func actionDisclosure<Content: View>(
+        _ title: String,
+        isExpanded: Binding<Bool>,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    isExpanded.wrappedValue.toggle()
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: isExpanded.wrappedValue ? "chevron.down" : "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .frame(width: 10)
+                    Text(title)
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("\(isExpanded.wrappedValue ? "Hide" : "Show") \(title.lowercased())")
+
+            if isExpanded.wrappedValue {
+                content()
+                    .padding(.leading, 16)
+            }
+        }
+        .font(.caption)
     }
 
     @ViewBuilder

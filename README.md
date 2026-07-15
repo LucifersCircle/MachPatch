@@ -196,6 +196,14 @@ are blocking failures.
 See [docs/livecontainer.md](docs/livecontainer.md) for the verification policy, device import and
 test workflow, Milestone 9 acceptance record, and known loader limitations.
 
+## Patch library
+
+The SwiftUI app can save valid patch projects to its private library at
+`~/Library/Application Support/MachPatch/Saved Patches`. **Save Patch** updates the matching
+project in that library, and **Load Patch** lists the saved projects without presenting a file
+access dialog. **Import Patch…** and **Export Patch…** remain available for exchanging the same
+canonical JSON format with other locations or users.
+
 ## Optional exports
 
 The SwiftUI build workspace keeps the verified plain dylib as the primary LiveContainer output.

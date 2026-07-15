@@ -565,7 +565,7 @@ final class WorkspaceModelTests: XCTestCase {
 
         model.removePatch(id: try XCTUnwrap(savedProject.patches.first?.id))
         model.navigation = .build
-        model.saveProject()
+        model.exportPatch()
         XCTAssertTrue(model.isProjectExporterPresented)
         model.isProjectExporterPresented = false
 
@@ -575,6 +575,54 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertEqual(model.patchProject, savedProject)
         XCTAssertEqual(model.navigation, .build)
         XCTAssertNil(model.selectedClass)
+    }
+
+    func testPrivatePatchLibrarySavesListsOverwritesAndLoadsWithoutExporter() async throws {
+        let libraryURL = FileManager.default.temporaryDirectory.appending(
+            path: "MachPatchLibraryTests-\(UUID().uuidString)",
+            directoryHint: .isDirectory
+        )
+        defer { try? FileManager.default.removeItem(at: libraryURL) }
+        let library = PatchProjectLibrary(directoryURL: libraryURL)
+        let target = makeLoadedTarget()
+        let analysis = makeAnalysis(for: target)
+        let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
+        let model = WorkspaceModel(
+            loader: SuccessfulLoader(target: loadedTarget),
+            projectLibrary: library
+        )
+
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+        let method = try XCTUnwrap(analysis.metadata.classes.first?.instanceMethods.first)
+        try model.addPatch(className: "AppController", method: method)
+        let savedProject = try XCTUnwrap(model.patchProject)
+
+        model.savePatch()
+
+        XCTAssertFalse(model.isProjectExporterPresented)
+        XCTAssertEqual(model.savedPatchProjects.count, 1)
+        let savedEntry = try XCTUnwrap(model.savedPatchProjects.first)
+        XCTAssertEqual(savedEntry.projectName, "Fixture Patch")
+        XCTAssertEqual(savedEntry.patchCount, 1)
+        XCTAssertFalse(savedEntry.fileURL.lastPathComponent.contains(" "))
+        XCTAssertEqual(
+            try PatchProjectCodec.decode(Data(contentsOf: savedEntry.fileURL)),
+            savedProject
+        )
+
+        model.savePatch()
+        XCTAssertEqual(try library.savedProjects().count, 1)
+
+        model.removePatch(id: try XCTUnwrap(savedProject.patches.first?.id))
+        XCTAssertTrue(try XCTUnwrap(model.patchProject).patches.isEmpty)
+        model.workspaceAlert = nil
+
+        model.loadPatch(savedEntry)
+        await waitForProjectImport(model)
+
+        XCTAssertEqual(model.patchProject, savedProject)
+        XCTAssertNil(model.pendingProjectImport)
     }
 
     func testChangedTargetProjectRequiresExplicitRetargetDecision() async throws {
