@@ -106,7 +106,8 @@ For example:
 Argument values and comparisons are validated against the decoded ABI type. After-effects and
 argument replacement require a primary action that calls the original implementation. Invocation
 count conditions require the counter. Alert text is size-limited and presented asynchronously on
-the main queue.
+the main queue. If any alert is already visible, a generated alert request is discarded rather
+than queued, preventing frequently invoked methods from building an alert backlog.
 
 Custom Objective-C is expert mode. Snippets are emitted inside the generated replacement function,
 where `self`, `_cmd`, and `argument0` through `argumentN` are in scope. Non-void after-effects also

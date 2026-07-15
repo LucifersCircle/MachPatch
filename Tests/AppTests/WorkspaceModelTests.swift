@@ -604,6 +604,7 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertEqual(model.savedPatchProjects.count, 1)
         let savedEntry = try XCTUnwrap(model.savedPatchProjects.first)
         XCTAssertEqual(savedEntry.projectName, "Fixture Patch")
+        XCTAssertEqual(savedEntry.target, savedProject.target)
         XCTAssertEqual(savedEntry.patchCount, 1)
         XCTAssertFalse(savedEntry.fileURL.lastPathComponent.contains(" "))
         XCTAssertEqual(
@@ -623,6 +624,225 @@ final class WorkspaceModelTests: XCTestCase {
 
         XCTAssertEqual(model.patchProject, savedProject)
         XCTAssertNil(model.pendingProjectImport)
+    }
+
+    func testPatchDeletionRequiresConfirmation() async throws {
+        let libraryURL = FileManager.default.temporaryDirectory.appending(
+            path: "MachPatchDeleteConfirmationTests-\(UUID().uuidString)",
+            directoryHint: .isDirectory
+        )
+        defer { try? FileManager.default.removeItem(at: libraryURL) }
+        let target = makeLoadedTarget()
+        let analysis = makeAnalysis(for: target)
+        let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
+        let model = WorkspaceModel(
+            loader: SuccessfulLoader(target: loadedTarget),
+            projectLibrary: PatchProjectLibrary(directoryURL: libraryURL)
+        )
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+        let method = try XCTUnwrap(analysis.metadata.classes.first?.instanceMethods.first)
+        let patch = try model.addPatch(className: "AppController", method: method)
+        XCTAssertTrue(model.savePatch())
+        XCTAssertFalse(model.hasUnsavedPatchChanges)
+
+        model.requestDeletePatch(patch)
+        XCTAssertEqual(model.pendingPatchDeletion, patch)
+        XCTAssertEqual(model.projectDraft?.patches, [patch])
+
+        model.cancelDeletePatch()
+        XCTAssertNil(model.pendingPatchDeletion)
+        XCTAssertEqual(model.projectDraft?.patches, [patch])
+
+        model.requestDeletePatch(patch)
+        model.confirmDeletePatch()
+        XCTAssertNil(model.pendingPatchDeletion)
+        XCTAssertTrue(try XCTUnwrap(model.projectDraft?.patches).isEmpty)
+        XCTAssertTrue(model.hasUnsavedPatchChanges)
+    }
+
+    func testNewPatchPromptsForUnsavedChangesAndCanDiscardThem() async throws {
+        let target = makeLoadedTarget()
+        let analysis = makeAnalysis(for: target)
+        let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
+        let model = WorkspaceModel(loader: SuccessfulLoader(target: loadedTarget))
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+
+        XCTAssertTrue(model.canStartNewPatch)
+        XCTAssertFalse(model.hasUnsavedPatchChanges)
+
+        let method = try XCTUnwrap(analysis.metadata.classes.first?.instanceMethods.first)
+        try model.addPatch(className: "AppController", method: method)
+        XCTAssertTrue(model.hasUnsavedPatchChanges)
+
+        model.requestNewPatch()
+        XCTAssertTrue(model.isNewPatchConfirmationPresented)
+        XCTAssertEqual(model.projectDraft?.patches.count, 1)
+
+        model.cancelNewPatch()
+        XCTAssertFalse(model.isNewPatchConfirmationPresented)
+        XCTAssertEqual(model.projectDraft?.patches.count, 1)
+
+        model.requestNewPatch()
+        model.discardAndStartNewPatch()
+        XCTAssertFalse(model.isNewPatchConfirmationPresented)
+        XCTAssertTrue(try XCTUnwrap(model.projectDraft?.patches).isEmpty)
+        XCTAssertFalse(model.hasUnsavedPatchChanges)
+    }
+
+    func testNewPatchCanSaveCurrentProjectBeforeResetting() async throws {
+        let libraryURL = FileManager.default.temporaryDirectory.appending(
+            path: "MachPatchNewProjectTests-\(UUID().uuidString)",
+            directoryHint: .isDirectory
+        )
+        defer { try? FileManager.default.removeItem(at: libraryURL) }
+        let library = PatchProjectLibrary(directoryURL: libraryURL)
+        let target = makeLoadedTarget()
+        let analysis = makeAnalysis(for: target)
+        let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
+        let model = WorkspaceModel(
+            loader: SuccessfulLoader(target: loadedTarget),
+            projectLibrary: library
+        )
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+        let method = try XCTUnwrap(analysis.metadata.classes.first?.instanceMethods.first)
+        try model.addPatch(className: "AppController", method: method)
+
+        model.requestNewPatch()
+        model.saveAndStartNewPatch()
+
+        XCTAssertFalse(model.isNewPatchConfirmationPresented)
+        XCTAssertTrue(try XCTUnwrap(model.projectDraft?.patches).isEmpty)
+        XCTAssertFalse(model.hasUnsavedPatchChanges)
+        let savedProject = try XCTUnwrap(library.savedProjects().first)
+        XCTAssertEqual(savedProject.patchCount, 1)
+    }
+
+    func testSavedPatchLoadingFiltersByTargetAndDeletionRequiresConfirmation() async throws {
+        let libraryURL = FileManager.default.temporaryDirectory.appending(
+            path: "MachPatchLibraryFilterTests-\(UUID().uuidString)",
+            directoryHint: .isDirectory
+        )
+        defer { try? FileManager.default.removeItem(at: libraryURL) }
+        let library = PatchProjectLibrary(directoryURL: libraryURL)
+        let target = makeLoadedTarget()
+        let analysis = makeAnalysis(for: target)
+        let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
+        let model = WorkspaceModel(
+            loader: SuccessfulLoader(target: loadedTarget),
+            projectLibrary: library
+        )
+
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+        let baseProject = try XCTUnwrap(model.patchProject)
+        func project(
+            named name: String,
+            bundleIdentifier: String?,
+            hash: Character,
+            cpuSubtype: Int32 = 0
+        ) -> PatchProject {
+            PatchProject(
+                projectName: name,
+                target: PatchTargetIdentity(
+                    bundleIdentifier: bundleIdentifier,
+                    executableName: baseProject.target.executableName,
+                    executableSHA256: String(repeating: hash, count: 64),
+                    selectedSlice: PatchSelectedSlice(
+                        architecture: baseProject.target.selectedSlice.architecture,
+                        cpuSubtype: cpuSubtype
+                    ),
+                    minimumIOSVersion: baseProject.target.minimumIOSVersion
+                ),
+                build: baseProject.build,
+                patches: []
+            )
+        }
+
+        try library.save(baseProject)
+        try library.save(
+            project(
+                named: "Same App New Build",
+                bundleIdentifier: baseProject.target.bundleIdentifier,
+                hash: "b"
+            )
+        )
+        try library.save(
+            project(
+                named: "Other App",
+                bundleIdentifier: "com.example.other",
+                hash: "c"
+            )
+        )
+        try library.save(
+            project(
+                named: "Wrong Slice",
+                bundleIdentifier: baseProject.target.bundleIdentifier,
+                hash: "d",
+                cpuSubtype: 2
+            )
+        )
+        model.refreshSavedPatchProjects()
+
+        XCTAssertEqual(model.savedPatchProjects.count, 4)
+        XCTAssertEqual(
+            Set(model.loadableSavedPatchProjects.map(\.projectName)),
+            Set([baseProject.projectName, "Same App New Build"])
+        )
+        let exact = try XCTUnwrap(
+            model.loadableSavedPatchProjects.first { $0.projectName == baseProject.projectName }
+        )
+        let changed = try XCTUnwrap(
+            model.loadableSavedPatchProjects.first { $0.projectName == "Same App New Build" }
+        )
+        let currentTarget = try XCTUnwrap(model.currentTargetIdentity)
+        XCTAssertTrue(exact.isExactExecutableMatch(to: currentTarget))
+        XCTAssertFalse(changed.isExactExecutableMatch(to: currentTarget))
+
+        let unrelated = try XCTUnwrap(
+            model.savedPatchProjects.first { $0.projectName == "Other App" }
+        )
+        model.requestDeleteSavedPatch(unrelated)
+        XCTAssertEqual(model.pendingSavedPatchDeletion, unrelated)
+        model.cancelDeleteSavedPatch()
+        XCTAssertNil(model.pendingSavedPatchDeletion)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unrelated.fileURL.path))
+
+        model.requestDeleteSavedPatch(unrelated)
+        model.confirmDeleteSavedPatch()
+        XCTAssertNil(model.pendingSavedPatchDeletion)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: unrelated.fileURL.path))
+        XCTAssertEqual(model.savedPatchProjects.count, 3)
+        XCTAssertEqual(model.workspaceAlert?.title, "Saved Patch Deleted")
+    }
+
+    func testSavedPatchWithoutBundleIdentifierRequiresExactExecutableHash() {
+        let target = PatchTargetIdentity(
+            bundleIdentifier: nil,
+            executableName: "DirectBinary",
+            executableSHA256: String(repeating: "a", count: 64),
+            selectedSlice: PatchSelectedSlice(architecture: .arm64, cpuSubtype: 0),
+            minimumIOSVersion: "15.0"
+        )
+        let saved = SavedPatchProject(
+            fileURL: URL(filePath: "/tmp/DirectBinary.json"),
+            projectName: "Direct Binary Patch",
+            target: target,
+            patchCount: 1,
+            savedAt: .distantPast
+        )
+        let changedHash = PatchTargetIdentity(
+            bundleIdentifier: nil,
+            executableName: target.executableName,
+            executableSHA256: String(repeating: "b", count: 64),
+            selectedSlice: target.selectedSlice,
+            minimumIOSVersion: target.minimumIOSVersion
+        )
+
+        XCTAssertTrue(saved.isRelevant(to: target))
+        XCTAssertFalse(saved.isRelevant(to: changedHash))
     }
 
     func testChangedTargetProjectRequiresExplicitRetargetDecision() async throws {

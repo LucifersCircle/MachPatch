@@ -234,6 +234,10 @@ private struct SourceRenderer {
                     NSLog(@"[MachPatch] Could not present alert because no active view controller was found.");
                     return;
                 }
+                if ([presenter isKindOfClass:[UIAlertController class]]) {
+                    NSLog(@"[MachPatch] Suppressed alert because another alert is already visible.");
+                    return;
+                }
                 UIAlertController *alert = [UIAlertController
                     alertControllerWithTitle:title
                     message:message

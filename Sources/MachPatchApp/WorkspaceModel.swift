@@ -18,6 +18,9 @@ final class WorkspaceModel: ObservableObject {
     @Published var classFilter: ObjectiveCClassFilter = .all
     @Published private(set) var projectDraft: PatchProjectDraft?
     @Published private(set) var savedPatchProjects: [SavedPatchProject] = []
+    @Published var pendingSavedPatchDeletion: SavedPatchProject?
+    @Published var pendingPatchDeletion: MethodPatch?
+    @Published var isNewPatchConfirmationPresented = false
     @Published var isProjectImporterPresented = false
     @Published var isProjectExporterPresented = false
     @Published var isDylibExporterPresented = false
@@ -43,6 +46,7 @@ final class WorkspaceModel: ObservableObject {
     private var projectTask: Task<Void, Never>?
     private var buildTask: Task<Void, Never>?
     private var buildID: UUID?
+    private var savedProjectBaseline: PatchProject?
 
     init(
         loader: any TargetLoading = TargetLoader(),
@@ -78,6 +82,7 @@ final class WorkspaceModel: ObservableObject {
         selectedMethodID = nil
         classSearch = ""
         classFilter = .all
+        savedProjectBaseline = nil
         replaceProjectDraft(nil)
         phase = .loading(inputURL)
         let loader = loader
@@ -87,7 +92,10 @@ final class WorkspaceModel: ObservableObject {
                 let loadedTarget = try await loader.loadTarget(at: inputURL)
                 try Task.checkCancellation()
                 self?.phase = .loaded(loadedTarget)
-                self?.replaceProjectDraft(PatchProjectDraft(loadedTarget: loadedTarget))
+                self?.replaceProjectDraft(
+                    PatchProjectDraft(loadedTarget: loadedTarget),
+                    marksClean: true
+                )
             } catch is CancellationError {
                 return
             } catch {
@@ -136,7 +144,10 @@ final class WorkspaceModel: ObservableObject {
                 else { return }
                 let analyzedTarget = currentTarget.replacingAnalysisState(.loaded(analysis))
                 self?.phase = .loaded(analyzedTarget)
-                self?.replaceProjectDraft(PatchProjectDraft(loadedTarget: analyzedTarget))
+                self?.replaceProjectDraft(
+                    PatchProjectDraft(loadedTarget: analyzedTarget),
+                    marksClean: true
+                )
             } catch is CancellationError {
                 return
             } catch {
@@ -192,8 +203,28 @@ final class WorkspaceModel: ObservableObject {
         projectDraft?.project
     }
 
+    var hasUnsavedPatchChanges: Bool {
+        guard let patchProject else { return false }
+        return patchProject != savedProjectBaseline
+    }
+
+    var canStartNewPatch: Bool {
+        guard case .loaded(let loadedTarget) = phase else { return false }
+        return PatchProjectDraft(loadedTarget: loadedTarget) != nil
+    }
+
     var projectValidationReport: PatchProjectValidationReport? {
         projectDraft?.validationReport
+    }
+
+    var currentTargetIdentity: PatchTargetIdentity? {
+        guard case .loaded(let loadedTarget) = phase else { return nil }
+        return PatchProjectDraft.targetIdentity(for: loadedTarget)
+    }
+
+    var loadableSavedPatchProjects: [SavedPatchProject] {
+        guard let currentTargetIdentity else { return [] }
+        return savedPatchProjects.filter { $0.isRelevant(to: currentTargetIdentity) }
     }
 
     var availableArchitectureModes: [PatchArchitectureMode] {
@@ -291,13 +322,14 @@ final class WorkspaceModel: ObservableObject {
         isProjectExporterPresented = true
     }
 
-    func savePatch() {
+    @discardableResult
+    func savePatch() -> Bool {
         guard let projectDraft else {
             workspaceAlert = WorkspaceAlert(
                 title: "No Patch Project",
                 message: "Choose and analyze a target before saving a patch."
             )
-            return
+            return false
         }
         let report = projectDraft.validationReport
         guard report.isValid else {
@@ -305,27 +337,89 @@ final class WorkspaceModel: ObservableObject {
                 title: "Project Has Validation Errors",
                 message: report.errors.map(\.message).joined(separator: "\n")
             )
-            return
+            return false
         }
 
         do {
             let savedProject = try projectLibrary.save(projectDraft.project)
+            savedProjectBaseline = projectDraft.project
             refreshSavedPatchProjects(reportErrors: false)
             workspaceAlert = WorkspaceAlert(
                 title: "Patch Saved",
                 message:
                     "Saved \(savedProject.projectName) to MachPatch’s private patch library."
             )
+            return true
         } catch {
             workspaceAlert = WorkspaceAlert(
                 title: "Couldn’t Save Patch",
                 message: error.localizedDescription
             )
+            return false
         }
+    }
+
+    func requestNewPatch() {
+        guard canStartNewPatch else {
+            workspaceAlert = WorkspaceAlert(
+                title: "Analyze a Target First",
+                message:
+                    "Open a target and choose a supported architecture before starting a patch."
+            )
+            return
+        }
+        if hasUnsavedPatchChanges {
+            isNewPatchConfirmationPresented = true
+        } else {
+            startNewPatch()
+        }
+    }
+
+    func saveAndStartNewPatch() {
+        isNewPatchConfirmationPresented = false
+        guard savePatch() else { return }
+        startNewPatch()
+    }
+
+    func discardAndStartNewPatch() {
+        isNewPatchConfirmationPresented = false
+        startNewPatch()
+    }
+
+    func cancelNewPatch() {
+        isNewPatchConfirmationPresented = false
     }
 
     func loadPatch(_ savedProject: SavedPatchProject) {
         openProject(at: savedProject.fileURL)
+    }
+
+    func requestDeleteSavedPatch(_ savedProject: SavedPatchProject) {
+        guard savedPatchProjects.contains(savedProject) else { return }
+        pendingSavedPatchDeletion = savedProject
+    }
+
+    func confirmDeleteSavedPatch() {
+        guard let savedProject = pendingSavedPatchDeletion else { return }
+        pendingSavedPatchDeletion = nil
+        do {
+            try projectLibrary.delete(savedProject)
+            refreshSavedPatchProjects(reportErrors: false)
+            workspaceAlert = WorkspaceAlert(
+                title: "Saved Patch Deleted",
+                message: "Deleted \(savedProject.projectName) from MachPatch’s private library."
+            )
+        } catch {
+            refreshSavedPatchProjects(reportErrors: false)
+            workspaceAlert = WorkspaceAlert(
+                title: "Couldn’t Delete Saved Patch",
+                message: error.localizedDescription
+            )
+        }
+    }
+
+    func cancelDeleteSavedPatch() {
+        pendingSavedPatchDeletion = nil
     }
 
     func refreshSavedPatchProjects() {
@@ -333,7 +427,10 @@ final class WorkspaceModel: ObservableObject {
     }
 
     func handleProjectExport(_ result: Result<URL, any Error>) {
-        if case .failure(let error) = result {
+        switch result {
+        case .success:
+            savedProjectBaseline = patchProject
+        case .failure(let error):
             workspaceAlert = WorkspaceAlert(
                 title: "Couldn’t Export Patch",
                 message: error.localizedDescription
@@ -602,6 +699,21 @@ final class WorkspaceModel: ObservableObject {
         replaceProjectDraft(projectDraft)
     }
 
+    func requestDeletePatch(_ patch: MethodPatch) {
+        guard projectDraft?.patches.contains(where: { $0.id == patch.id }) == true else { return }
+        pendingPatchDeletion = patch
+    }
+
+    func confirmDeletePatch() {
+        guard let patch = pendingPatchDeletion else { return }
+        pendingPatchDeletion = nil
+        removePatch(id: patch.id)
+    }
+
+    func cancelDeletePatch() {
+        pendingPatchDeletion = nil
+    }
+
     func updateProjectName(_ projectName: String) {
         updateProjectDraft { $0.projectName = projectName }
     }
@@ -723,7 +835,21 @@ final class WorkspaceModel: ObservableObject {
         _ project: PatchProject,
         targetOverride: PatchTargetIdentity? = nil
     ) {
-        replaceProjectDraft(PatchProjectDraft(project: project, targetOverride: targetOverride))
+        replaceProjectDraft(
+            PatchProjectDraft(project: project, targetOverride: targetOverride),
+            marksClean: true
+        )
+    }
+
+    private func startNewPatch() {
+        guard case .loaded(let loadedTarget) = phase,
+            let draft = PatchProjectDraft(loadedTarget: loadedTarget)
+        else { return }
+
+        pendingPatchDeletion = nil
+        pendingProjectImport = nil
+        resetBuildState(removingArtifact: true)
+        replaceProjectDraft(draft, marksClean: true)
     }
 
     private func refreshSavedPatchProjects(reportErrors: Bool) {
@@ -775,9 +901,15 @@ final class WorkspaceModel: ObservableObject {
         replaceProjectDraft(projectDraft)
     }
 
-    private func replaceProjectDraft(_ projectDraft: PatchProjectDraft?) {
+    private func replaceProjectDraft(
+        _ projectDraft: PatchProjectDraft?,
+        marksClean: Bool = false
+    ) {
         invalidateBuildState()
         self.projectDraft = projectDraft
+        if marksClean {
+            savedProjectBaseline = projectDraft?.project
+        }
         refreshBuildWorkspace()
     }
 

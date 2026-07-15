@@ -17,6 +17,15 @@ struct MachPatchRootView: View {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
                     Button {
+                        model.requestNewPatch()
+                    } label: {
+                        Label("New Patch", systemImage: "doc.badge.plus")
+                    }
+                    .disabled(!model.canStartNewPatch)
+
+                    Divider()
+
+                    Button {
                         model.savePatch()
                     } label: {
                         Label("Save Patch", systemImage: "tray.and.arrow.down.fill")
@@ -24,25 +33,45 @@ struct MachPatchRootView: View {
                     .disabled(model.projectDraft == nil)
 
                     Menu {
-                        if model.savedPatchProjects.isEmpty {
-                            Text("No Saved Patches")
+                        if model.currentTargetIdentity == nil {
+                            Text("Analyze a Target First")
+                        } else if model.loadableSavedPatchProjects.isEmpty {
+                            Text("No Saved Patches for This Target")
                         } else {
-                            ForEach(model.savedPatchProjects) { savedProject in
+                            ForEach(model.loadableSavedPatchProjects) { savedProject in
                                 Button {
                                     model.loadPatch(savedProject)
                                 } label: {
                                     Label(
                                         savedPatchLabel(savedProject),
-                                        systemImage: "hammer"
+                                        systemImage: savedPatchLoadSystemImage(savedProject)
                                     )
                                 }
-                                .help(
-                                    "\(savedProject.targetExecutableName) · \(savedProject.patchCount) patch\(savedProject.patchCount == 1 ? "" : "es")"
-                                )
+                                .help(savedPatchLoadHelp(savedProject))
                             }
                         }
                     } label: {
                         Label("Load Patch", systemImage: "tray.full")
+                    }
+
+                    Menu {
+                        if model.savedPatchProjects.isEmpty {
+                            Text("No Saved Patches")
+                        } else {
+                            ForEach(model.savedPatchProjects) { savedProject in
+                                Button {
+                                    model.requestDeleteSavedPatch(savedProject)
+                                } label: {
+                                    Label(
+                                        deleteSavedPatchLabel(savedProject), systemImage: "trash")
+                                }
+                                .help(
+                                    "Delete the saved patch for \(savedProject.targetExecutableName), executable \(savedProject.target.executableSHA256.prefix(8))."
+                                )
+                            }
+                        }
+                    } label: {
+                        Label("Delete Saved Patch", systemImage: "trash")
                     }
 
                     Divider()
@@ -137,11 +166,141 @@ struct MachPatchRootView: View {
                 dismissButton: .default(Text("OK"))
             )
         }
-        .confirmationDialog(
+        .modifier(DeleteSavedPatchConfirmation(model: model))
+        .modifier(DeletePatchConfirmation(model: model))
+        .modifier(NewPatchConfirmation(model: model))
+        .modifier(TargetChangedConfirmation(model: model))
+    }
+
+    private func savedPatchLabel(_ savedProject: SavedPatchProject) -> String {
+        let suffix = savedProject.patchCount == 1 ? "patch" : "patches"
+        return "\(savedProject.projectName) · \(savedProject.patchCount) \(suffix)"
+    }
+
+    private func deleteSavedPatchLabel(_ savedProject: SavedPatchProject) -> String {
+        let suffix = savedProject.patchCount == 1 ? "patch" : "patches"
+        return
+            "\(savedProject.projectName) · \(savedProject.targetExecutableName) · \(savedProject.patchCount) \(suffix)"
+    }
+
+    private func savedPatchLoadSystemImage(_ savedProject: SavedPatchProject) -> String {
+        guard let target = model.currentTargetIdentity else { return "hammer" }
+        return savedProject.isExactExecutableMatch(to: target)
+            ? "checkmark.circle" : "arrow.triangle.2.circlepath"
+    }
+
+    private func savedPatchLoadHelp(_ savedProject: SavedPatchProject) -> String {
+        guard let target = model.currentTargetIdentity else {
+            return savedProject.targetExecutableName
+        }
+        let match =
+            savedProject.isExactExecutableMatch(to: target)
+            ? "Exact executable match"
+            : "Same app, different executable build; compatibility will be checked"
+        return
+            "\(match) · \(savedProject.targetExecutableName) · \(savedProject.patchCount) patch\(savedProject.patchCount == 1 ? "" : "es")"
+    }
+}
+
+private struct DeletePatchConfirmation: ViewModifier {
+    @ObservedObject var model: WorkspaceModel
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog(
+            "Delete Patch?",
+            isPresented: Binding(
+                get: { model.pendingPatchDeletion != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        model.cancelDeletePatch()
+                    }
+                }
+            ),
+            presenting: model.pendingPatchDeletion
+        ) { patch in
+            Button("Delete Patch", role: .destructive) {
+                model.confirmDeletePatch()
+            }
+            Button("Cancel", role: .cancel) {
+                model.cancelDeletePatch()
+            }
+        } message: { patch in
+            let marker = patch.methodKind == .instance ? "−" : "+"
+            Text(
+                "This permanently removes \(marker)[\(patch.className) \(patch.selector)] from the current project."
+            )
+        }
+    }
+}
+
+private struct NewPatchConfirmation: ViewModifier {
+    @ObservedObject var model: WorkspaceModel
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog(
+            "Save Changes Before Starting a New Patch?",
+            isPresented: $model.isNewPatchConfirmationPresented
+        ) {
+            Button("Save and Start New") {
+                model.saveAndStartNewPatch()
+            }
+            Button("Start New Without Saving", role: .destructive) {
+                model.discardAndStartNewPatch()
+            }
+            Button("Cancel", role: .cancel) {
+                model.cancelNewPatch()
+            }
+        } message: {
+            Text(
+                "The current project has unsaved changes. Starting a new patch will reset its settings and remove all of its method patches."
+            )
+        }
+    }
+}
+
+private struct DeleteSavedPatchConfirmation: ViewModifier {
+    @ObservedObject var model: WorkspaceModel
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog(
+            "Delete Saved Patch?",
+            isPresented: Binding(
+                get: { model.pendingSavedPatchDeletion != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        model.cancelDeleteSavedPatch()
+                    }
+                }
+            ),
+            presenting: model.pendingSavedPatchDeletion
+        ) { savedProject in
+            Button("Delete \(savedProject.projectName)", role: .destructive) {
+                model.confirmDeleteSavedPatch()
+            }
+            Button("Cancel", role: .cancel) {
+                model.cancelDeleteSavedPatch()
+            }
+        } message: { savedProject in
+            Text(
+                "This permanently removes the saved project for \(savedProject.targetExecutableName), executable \(savedProject.target.executableSHA256.prefix(8)), from MachPatch’s private library."
+            )
+        }
+    }
+}
+
+private struct TargetChangedConfirmation: ViewModifier {
+    @ObservedObject var model: WorkspaceModel
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog(
             "The Target Has Changed",
             isPresented: Binding(
                 get: { model.pendingProjectImport != nil },
-                set: { if !$0 { model.cancelPendingProjectImport() } }
+                set: { isPresented in
+                    if !isPresented {
+                        model.cancelPendingProjectImport()
+                    }
+                }
             ),
             presenting: model.pendingProjectImport
         ) { _ in
@@ -157,11 +316,6 @@ struct MachPatchRootView: View {
         } message: { pending in
             Text(pending.warnings.map(\.message).joined(separator: "\n"))
         }
-    }
-
-    private func savedPatchLabel(_ savedProject: SavedPatchProject) -> String {
-        let suffix = savedProject.patchCount == 1 ? "patch" : "patches"
-        return "\(savedProject.projectName) · \(savedProject.patchCount) \(suffix)"
     }
 }
 

@@ -332,21 +332,30 @@ struct BuildWorkspaceView: View {
             .buttonStyle(.plain)
             .help("Open this patch in its class and method editor.")
 
-            Button {
-                model.updatePatch(patch.replacing(enabled: !patch.enabled))
-            } label: {
-                Label(
-                    patch.enabled ? "Disable" : "Enable",
-                    systemImage: patch.enabled ? "pause.fill" : "play.fill"
+            HStack(spacing: 6) {
+                Button {
+                    model.updatePatch(patch.replacing(enabled: !patch.enabled))
+                } label: {
+                    Label(
+                        patch.enabled ? "Disable" : "Enable",
+                        systemImage: patch.enabled ? "pause.fill" : "play.fill"
+                    )
+                }
+                .help(
+                    patch.enabled
+                        ? "Keep this patch and its settings, but omit it from builds."
+                        : "Include this preserved patch in generated source and builds."
                 )
+
+                Button(role: .destructive) {
+                    model.requestDeletePatch(patch)
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+                .help("Permanently remove this method patch from the current project.")
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .help(
-                patch.enabled
-                    ? "Keep this patch and its settings, but omit it from builds."
-                    : "Include this preserved patch in generated source and builds."
-            )
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)

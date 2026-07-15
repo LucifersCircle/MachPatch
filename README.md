@@ -206,9 +206,12 @@ test workflow, Milestone 9 acceptance record, and known loader limitations.
 
 The SwiftUI app can save valid patch projects to its private library at
 `~/Library/Application Support/MachPatch/Saved Patches`. **Save Patch** updates the matching
-project in that library, and **Load Patch** lists the saved projects without presenting a file
-access dialog. **Import Patch…** and **Export Patch…** remain available for exchanging the same
-canonical JSON format with other locations or users.
+project in that library. **Load Patch** lists only projects relevant to the analyzed target: exact
+executable matches and, for bundled apps, other builds with the same bundle identifier,
+executable name, and selected slice. Normal compatibility validation still runs before loading.
+**Delete Saved Patch** lists the entire private library and requires destructive confirmation.
+**Import Patch…** and **Export Patch…** remain available for exchanging the same canonical JSON
+format with other locations or users.
 
 ## Optional exports
 

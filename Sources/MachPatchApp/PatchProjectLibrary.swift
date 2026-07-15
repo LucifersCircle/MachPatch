@@ -4,11 +4,36 @@ import MachPatchCore
 struct SavedPatchProject: Identifiable, Equatable, Sendable {
     let fileURL: URL
     let projectName: String
-    let targetExecutableName: String
+    let target: PatchTargetIdentity
     let patchCount: Int
     let savedAt: Date
 
     var id: URL { fileURL }
+
+    var targetExecutableName: String { target.executableName }
+
+    func isRelevant(to currentTarget: PatchTargetIdentity) -> Bool {
+        guard target.executableName == currentTarget.executableName,
+            target.selectedSlice == currentTarget.selectedSlice
+        else { return false }
+
+        if target.executableSHA256.caseInsensitiveCompare(currentTarget.executableSHA256)
+            == .orderedSame
+        {
+            return true
+        }
+        guard let savedBundleIdentifier = target.bundleIdentifier,
+            let currentBundleIdentifier = currentTarget.bundleIdentifier
+        else { return false }
+        return savedBundleIdentifier == currentBundleIdentifier
+    }
+
+    func isExactExecutableMatch(to currentTarget: PatchTargetIdentity) -> Bool {
+        target.executableSHA256.caseInsensitiveCompare(currentTarget.executableSHA256)
+            == .orderedSame
+            && target.executableName == currentTarget.executableName
+            && target.selectedSlice == currentTarget.selectedSlice
+    }
 }
 
 protocol PatchProjectLibraryServicing {
@@ -17,6 +42,7 @@ protocol PatchProjectLibraryServicing {
     func savedProjects() throws -> [SavedPatchProject]
     @discardableResult
     func save(_ project: PatchProject) throws -> SavedPatchProject
+    func delete(_ savedProject: SavedPatchProject) throws
 }
 
 struct PatchProjectLibrary: PatchProjectLibraryServicing {
@@ -61,7 +87,7 @@ struct PatchProjectLibrary: PatchProjectLibraryServicing {
             return SavedPatchProject(
                 fileURL: fileURL,
                 projectName: project.projectName,
-                targetExecutableName: project.target.executableName,
+                target: project.target,
                 patchCount: project.patches.count,
                 savedAt: values.contentModificationDate ?? .distantPast
             )
@@ -84,10 +110,29 @@ struct PatchProjectLibrary: PatchProjectLibraryServicing {
         return SavedPatchProject(
             fileURL: fileURL,
             projectName: project.projectName,
-            targetExecutableName: project.target.executableName,
+            target: project.target,
             patchCount: project.patches.count,
             savedAt: savedAt
         )
+    }
+
+    func delete(_ savedProject: SavedPatchProject) throws {
+        let fileURL = savedProject.fileURL.standardizedFileURL
+        let parentURL = fileURL.deletingLastPathComponent().standardizedFileURL
+        guard parentURL == directoryURL.standardizedFileURL,
+            fileURL.pathExtension.lowercased() == "json"
+        else {
+            throw PatchProjectLibraryError.invalidSavedProject
+        }
+
+        let values = try fileURL.resourceValues(forKeys: [
+            .isRegularFileKey,
+            .isSymbolicLinkKey,
+        ])
+        guard values.isRegularFile == true, values.isSymbolicLink != true else {
+            throw PatchProjectLibraryError.invalidSavedProject
+        }
+        try FileManager.default.removeItem(at: fileURL)
     }
 
     private func createDirectoryIfNeeded() throws {
@@ -124,5 +169,16 @@ struct PatchProjectLibrary: PatchProjectLibraryServicing {
         return result.trimmingCharacters(in: CharacterSet(charactersIn: "-_")).isEmpty
             ? "Patch"
             : result.trimmingCharacters(in: CharacterSet(charactersIn: "-_"))
+    }
+}
+
+enum PatchProjectLibraryError: LocalizedError, Equatable {
+    case invalidSavedProject
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidSavedProject:
+            "The selected file is not a regular saved patch in MachPatch’s private library."
+        }
     }
 }

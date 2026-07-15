@@ -95,6 +95,11 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
         XCTAssertEqual(first, second)
         XCTAssertTrue(first.contains("#import <UIKit/UIKit.h>"))
         XCTAssertTrue(first.contains("static void MPShowAlert"))
+        XCTAssertTrue(
+            first.contains(
+                "Suppressed alert because another alert is already visible."
+            )
+        )
         XCTAssertTrue(first.contains("__atomic_add_fetch"))
         XCTAssertTrue(first.contains("if (invocationCount > (unsigned long long)3ULL)"))
         XCTAssertTrue(first.contains("MPShowAlert(@\"MachPatch\", @\"Called\", @\"Dismiss\")"))
