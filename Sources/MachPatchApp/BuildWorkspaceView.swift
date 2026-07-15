@@ -392,8 +392,9 @@ struct BuildWorkspaceView: View {
                             .textSelection(.enabled)
                             .fixedSize(horizontal: true, vertical: true)
                             .padding(16)
-                            .frame(maxWidth: .infinity, alignment: .topLeading)
                     }
+                    .defaultScrollAnchor(.topLeading)
+                    .id(sourceFile.contents.hashValue)
                     .background(Color(nsColor: .textBackgroundColor).opacity(0.35))
                 }
             }
