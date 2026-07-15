@@ -1,6 +1,7 @@
 import Foundation
 import MachPatchBuilder
 import MachPatchCore
+import MachPatchVerifier
 import XCTest
 
 @testable import MachPatchApp
@@ -228,21 +229,31 @@ final class WorkspaceModelTests: XCTestCase {
         let analysis = makeAnalysis(for: target)
         let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
         let buildService = StubPatchBuildService()
+        let verificationService = StubPatchVerificationService()
         let model = WorkspaceModel(
             loader: SuccessfulLoader(target: loadedTarget),
-            buildService: buildService
+            buildService: buildService,
+            verificationService: verificationService
         )
         model.openTarget(at: loadedTarget.inputURL)
         await waitForLoadToFinish(model)
 
         model.buildDylib()
-        await waitForBuildToFinish(model)
+        await waitForVerificationToFinish(model)
 
         guard case .succeeded(let artifact) = model.buildState else {
             return XCTFail("Expected a successful dylib build")
         }
         XCTAssertEqual(artifact.record.architecture, .arm64)
         XCTAssertEqual(artifact.dylibURL.lastPathComponent, "FixturePatch.dylib")
+        XCTAssertTrue(model.canExportDylib)
+        XCTAssertEqual(model.verificationState.report, verificationService.report)
+
+        model.exportDylib()
+
+        XCTAssertTrue(model.isDylibExporterPresented)
+        XCTAssertNotNil(model.dylibExportDocument)
+        XCTAssertEqual(model.defaultDylibFilename, "FixturePatch.dylib")
 
         model.updateOutputName("ChangedPatch")
 
@@ -250,6 +261,10 @@ final class WorkspaceModelTests: XCTestCase {
             return XCTFail("Project edits must mark the successful build stale")
         }
         XCTAssertEqual(staleArtifact, artifact)
+        XCTAssertFalse(model.canExportDylib)
+        guard case .unavailable = model.verificationState else {
+            return XCTFail("A project edit must invalidate the verification report")
+        }
     }
 
     func testDisablingPatchPreservesConfigurationAndOmitsItFromGeneratedSource() async throws {
@@ -293,14 +308,16 @@ final class WorkspaceModelTests: XCTestCase {
         let analysis = makeAnalysis(for: target)
         let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
         let buildService = StubPatchBuildService()
+        let verificationService = StubPatchVerificationService()
         let model = WorkspaceModel(
             loader: SuccessfulLoader(target: loadedTarget),
-            buildService: buildService
+            buildService: buildService,
+            verificationService: verificationService
         )
         model.openTarget(at: loadedTarget.inputURL)
         await waitForLoadToFinish(model)
         model.buildDylib()
-        await waitForBuildToFinish(model)
+        await waitForVerificationToFinish(model)
         let successfulArtifact = model.buildState.artifact
 
         let invocation = BuildCommandInvocation(
@@ -326,6 +343,61 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertEqual(failure.command, "/usr/bin/clang -dynamiclib Fixture.m")
         XCTAssertEqual(failure.terminationStatus, 1)
         XCTAssertEqual(failure.diagnosticText, "Fixture.m:12:3: error: synthetic failure")
+    }
+
+    func testBlockingVerificationPreservesBuildAndPreventsExport() async {
+        let target = makeLoadedTarget()
+        let analysis = makeAnalysis(for: target)
+        let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
+        let verificationService = StubPatchVerificationService(
+            report: makeVerificationReport(status: .failed)
+        )
+        let model = WorkspaceModel(
+            loader: SuccessfulLoader(target: loadedTarget),
+            buildService: StubPatchBuildService(),
+            verificationService: verificationService
+        )
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+
+        model.buildDylib()
+        await waitForVerificationToFinish(model)
+
+        guard case .succeeded = model.buildState else {
+            return XCTFail("A blocked verification must preserve the successful build")
+        }
+        XCTAssertEqual(model.verificationState.report?.result, .blocked)
+        XCTAssertFalse(model.canExportDylib)
+
+        model.exportDylib()
+
+        XCTAssertEqual(model.workspaceAlert?.title, "Verification Required")
+        XCTAssertFalse(model.isDylibExporterPresented)
+    }
+
+    func testVerificationExecutionFailureIsVisibleAndPreventsExport() async {
+        let target = makeLoadedTarget()
+        let analysis = makeAnalysis(for: target)
+        let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
+        let verificationService = StubPatchVerificationService()
+        verificationService.failure = .failed
+        let model = WorkspaceModel(
+            loader: SuccessfulLoader(target: loadedTarget),
+            buildService: StubPatchBuildService(),
+            verificationService: verificationService
+        )
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+
+        model.buildDylib()
+        await waitForVerificationToFinish(model)
+
+        guard case .failed(let failure) = model.verificationState else {
+            return XCTFail("Expected verification execution failure")
+        }
+        XCTAssertEqual(failure.message, StubError.failed.localizedDescription)
+        XCTAssertNotNil(model.buildState.artifact)
+        XCTAssertFalse(model.canExportDylib)
     }
 
     func testPatchActionPolicyIsTypeAwareAndExplainsUnsupportedSignatures() throws {
@@ -537,6 +609,21 @@ final class WorkspaceModelTests: XCTestCase {
             await Task.yield()
         }
         XCTFail("Dylib build did not finish")
+    }
+
+    private func waitForVerificationToFinish(_ model: WorkspaceModel) async {
+        for _ in 0..<1_000 {
+            if !model.buildState.isBuilding {
+                switch model.verificationState {
+                case .verified, .failed:
+                    return
+                case .idle, .verifying, .unavailable:
+                    break
+                }
+            }
+            await Task.yield()
+        }
+        XCTFail("Dylib verification did not finish")
     }
 
     private func temporaryProjectURL() -> URL {
@@ -753,8 +840,65 @@ private final class StubPatchBuildService: PatchBuildServicing, @unchecked Senda
             symbolChecks: [],
             merge: nil
         )
+        try? FileManager.default.createDirectory(
+            at: workspace,
+            withIntermediateDirectories: true
+        )
+        try? Data("test dylib".utf8).write(to: URL(filePath: record.outputPath))
         return PatchBuildArtifact(workspaceURL: workspace, record: record)
     }
+}
+
+private final class StubPatchVerificationService: PatchVerificationServicing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedReport: DylibVerificationReport
+    private var storedFailure: StubError?
+
+    init(report: DylibVerificationReport = makeVerificationReport(status: .passed)) {
+        storedReport = report
+    }
+
+    var report: DylibVerificationReport {
+        lock.withLock { storedReport }
+    }
+
+    var failure: StubError? {
+        get { lock.withLock { storedFailure } }
+        set { lock.withLock { storedFailure = newValue } }
+    }
+
+    func verify(
+        artifact _: PatchBuildArtifact,
+        targetInspection _: MachOInspection
+    ) throws -> DylibVerificationReport {
+        try lock.withLock {
+            if let storedFailure { throw storedFailure }
+            return storedReport
+        }
+    }
+}
+
+private func makeVerificationReport(status: VerificationCheckStatus) -> DylibVerificationReport {
+    DylibVerificationReport(
+        dylibPath: "/tmp/FixturePatch.dylib",
+        target: nil,
+        slices: [],
+        targetSlices: [],
+        lipoArchitectures: ["arm64"],
+        dependencies: [],
+        unresolvedSymbols: [],
+        forbiddenPaths: [],
+        checks: [
+            VerificationCheck(
+                code: .targetCompatibility,
+                status: status,
+                message: status == .failed
+                    ? "The generated dylib does not match the selected target."
+                    : "The generated dylib matches the selected target."
+            )
+        ],
+        toolExecutions: []
+    )
 }
 
 private struct FailingLoader: TargetLoading {

@@ -65,6 +65,13 @@ struct MachPatchRootView: View {
             defaultFilename: model.defaultProjectFilename,
             onCompletion: model.handleProjectExport
         )
+        .fileExporter(
+            isPresented: $model.isDylibExporterPresented,
+            document: model.dylibExportDocument,
+            contentType: .machPatchDynamicLibrary,
+            defaultFilename: model.defaultDylibFilename,
+            onCompletion: model.handleDylibExport
+        )
         .dropDestination(for: URL.self) { urls, _ in
             guard let inputURL = urls.first else { return false }
             model.openTarget(at: inputURL)

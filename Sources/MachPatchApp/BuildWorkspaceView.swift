@@ -1,6 +1,7 @@
 import MachPatchBuilder
 import MachPatchCore
 import MachPatchGenerator
+import MachPatchVerifier
 import SwiftUI
 
 struct BuildWorkspaceView: View {
@@ -61,6 +62,7 @@ struct BuildWorkspaceView: View {
                 architectureSummary
                 validationSummary
                 buildPanel
+                verificationPanel
             }
             .padding(20)
         }
@@ -536,7 +538,7 @@ struct BuildWorkspaceView: View {
                 .foregroundStyle(.secondary)
             } else {
                 Label(
-                    "Stored privately for this session. Verify & Export will let you choose its final destination.",
+                    "Stored privately for this session while LiveContainer verification runs.",
                     systemImage: "lock.shield"
                 )
                 .font(.caption)
@@ -564,6 +566,134 @@ struct BuildWorkspaceView: View {
                 .padding(.top, 8)
             }
         }
+    }
+
+    private var verificationPanel: some View {
+        GroupBox("Verify & Export") {
+            VStack(alignment: .leading, spacing: 12) {
+                switch model.verificationState {
+                case .idle:
+                    Label(
+                        "Build a dylib to run the LiveContainer compatibility checks.",
+                        systemImage: "checkmark.shield"
+                    )
+                    .foregroundStyle(.secondary)
+                case .verifying:
+                    HStack(spacing: 10) {
+                        ProgressView()
+                            .controlSize(.small)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Verifying Dylib…")
+                                .font(.subheadline.weight(.semibold))
+                            Text(
+                                "Checking architecture, platform, install name, dependencies, symbols, paths, and target compatibility."
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
+                case .unavailable(let message):
+                    Label(message, systemImage: "clock.badge.exclamationmark")
+                        .foregroundStyle(.orange)
+                case .failed(let failure):
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("Verification Couldn’t Run", systemImage: "xmark.octagon.fill")
+                            .foregroundStyle(.red)
+                        Text(failure.message)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                case .verified(let report):
+                    verificationReport(report)
+                }
+
+                Button {
+                    model.exportDylib()
+                } label: {
+                    Label("Export Dylib…", systemImage: "square.and.arrow.down")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!model.canExportDylib)
+                .help(exportHelpText)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(8)
+        }
+    }
+
+    private func verificationReport(_ report: DylibVerificationReport) -> some View {
+        let passedCount = report.checks.count { $0.status == .passed }
+        let warningCount = report.checks.count { $0.status == .warning }
+        let failedCount = report.checks.count { $0.status == .failed }
+
+        return VStack(alignment: .leading, spacing: 10) {
+            Label(
+                report.isReadyForLiveContainerTesting
+                    ? "Ready for LiveContainer Testing" : "Export Blocked",
+                systemImage: report.isReadyForLiveContainerTesting
+                    ? "checkmark.shield.fill" : "xmark.shield.fill"
+            )
+            .font(.headline)
+            .foregroundStyle(report.isReadyForLiveContainerTesting ? .green : .red)
+
+            HStack(spacing: 12) {
+                verificationCount(passedCount, title: "Passed", color: .green)
+                if warningCount > 0 {
+                    verificationCount(warningCount, title: "Warnings", color: .orange)
+                }
+                if failedCount > 0 {
+                    verificationCount(failedCount, title: "Failed", color: .red)
+                }
+            }
+
+            DisclosureGroup("Verification Checks") {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(Array(report.checks.enumerated()), id: \.offset) { _, check in
+                        verificationCheck(check)
+                    }
+                }
+                .padding(.top, 8)
+            }
+        }
+    }
+
+    private func verificationCount(_ count: Int, title: String, color: Color) -> some View {
+        HStack(spacing: 4) {
+            Text(String(count))
+                .font(.caption.monospacedDigit().weight(.semibold))
+            Text(title)
+                .font(.caption)
+        }
+        .foregroundStyle(color)
+    }
+
+    private func verificationCheck(_ check: VerificationCheck) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: check.status.systemImage)
+                .foregroundStyle(check.status.color)
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(check.code.displayName)
+                    .font(.caption.weight(.semibold))
+                Text(check.message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+
+    private var exportHelpText: String {
+        if model.canExportDylib {
+            return "Choose where to save the verified dylib."
+        }
+        if case .verified(let report) = model.verificationState,
+            !report.isReadyForLiveContainerTesting
+        {
+            return "Export is blocked until every failed verification check is resolved."
+        }
+        return "A fresh, successfully verified build is required before export."
     }
 
     private func buildFailureSummary(
@@ -712,6 +842,41 @@ private extension PatchBuildOutputArchitecture {
         case .arm64: "arm64"
         case .arm64e: "arm64e"
         case .universal: "Universal"
+        }
+    }
+}
+
+private extension VerificationCheckStatus {
+    var systemImage: String {
+        switch self {
+        case .passed: "checkmark.circle.fill"
+        case .warning: "exclamationmark.triangle.fill"
+        case .failed: "xmark.circle.fill"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .passed: .green
+        case .warning: .orange
+        case .failed: .red
+        }
+    }
+}
+
+private extension VerificationCheckCode {
+    var displayName: String {
+        switch self {
+        case .fileType: "Dynamic Library"
+        case .architecture: "Architecture"
+        case .lipoAgreement: "Architecture Cross-check"
+        case .platform: "iPhoneOS Platform"
+        case .deploymentTarget: "Deployment Target"
+        case .installName: "Install Name"
+        case .dependency: "Dependencies"
+        case .unresolvedSymbols: "Unresolved Symbols"
+        case .targetCompatibility: "Target Compatibility"
+        case .forbiddenFilesystemPath: "Filesystem Paths"
         }
     }
 }

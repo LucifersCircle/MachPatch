@@ -4,6 +4,7 @@ import MachPatchAnalyzer
 import MachPatchBuilder
 import MachPatchCore
 import MachPatchGenerator
+import MachPatchVerifier
 
 @MainActor
 final class WorkspaceModel: ObservableObject {
@@ -16,15 +17,19 @@ final class WorkspaceModel: ObservableObject {
     @Published private(set) var projectDraft: PatchProjectDraft?
     @Published var isProjectImporterPresented = false
     @Published var isProjectExporterPresented = false
+    @Published var isDylibExporterPresented = false
+    @Published private(set) var dylibExportDocument: DylibExportDocument?
     @Published var workspaceAlert: WorkspaceAlert?
     @Published var pendingProjectImport: PendingProjectImport?
     @Published private(set) var generatedSourcePreview: GeneratedSourcePreviewState =
         .unavailable("Create a valid patch project to preview its generated source.")
     @Published private(set) var architecturePreview: ArchitecturePreviewState = .unavailable
     @Published private(set) var buildState: PatchBuildState = .idle
+    @Published private(set) var verificationState: PatchVerificationState = .idle
 
     private let loader: any TargetLoading
     private let buildService: any PatchBuildServicing
+    private let verificationService: any PatchVerificationServicing
     private var loadTask: Task<Void, Never>?
     private var analysisTask: Task<Void, Never>?
     private var projectTask: Task<Void, Never>?
@@ -33,10 +38,12 @@ final class WorkspaceModel: ObservableObject {
 
     init(
         loader: any TargetLoading = TargetLoader(),
-        buildService: any PatchBuildServicing = PatchBuildService()
+        buildService: any PatchBuildServicing = PatchBuildService(),
+        verificationService: any PatchVerificationServicing = PatchVerificationService()
     ) {
         self.loader = loader
         self.buildService = buildService
+        self.verificationService = verificationService
     }
 
     func chooseTarget() {
@@ -189,7 +196,9 @@ final class WorkspaceModel: ObservableObject {
     }
 
     var canBuild: Bool {
-        guard projectValidationReport?.isValid == true, !buildState.isBuilding else {
+        guard projectValidationReport?.isValid == true, !buildState.isBuilding,
+            !verificationState.isVerifying
+        else {
             return false
         }
         if case .resolved = architecturePreview { return true }
@@ -199,6 +208,18 @@ final class WorkspaceModel: ObservableObject {
     var defaultProjectFilename: String {
         let name = projectDraft?.outputName ?? "MachPatch"
         return "\(name).json"
+    }
+
+    var defaultDylibFilename: String {
+        buildState.artifact?.dylibURL.lastPathComponent
+            ?? "\(projectDraft?.outputName ?? "MachPatch").dylib"
+    }
+
+    var canExportDylib: Bool {
+        guard case .succeeded = buildState,
+            case .verified(let report) = verificationState
+        else { return false }
+        return report.isReadyForLiveContainerTesting
     }
 
     func saveProject() {
@@ -227,6 +248,53 @@ final class WorkspaceModel: ObservableObject {
                 message: error.localizedDescription
             )
         }
+    }
+
+    func exportDylib() {
+        guard case .succeeded(let artifact) = buildState else {
+            workspaceAlert = WorkspaceAlert(
+                title: "Fresh Build Required",
+                message: "Build the current patch project before exporting its dylib."
+            )
+            return
+        }
+        guard case .verified(let report) = verificationState,
+            report.isReadyForLiveContainerTesting
+        else {
+            workspaceAlert = WorkspaceAlert(
+                title: "Verification Required",
+                message:
+                    "Resolve every blocking verification failure before exporting the dylib."
+            )
+            return
+        }
+
+        do {
+            dylibExportDocument = try DylibExportDocument(contentsOf: artifact.dylibURL)
+            isDylibExporterPresented = true
+        } catch {
+            workspaceAlert = WorkspaceAlert(
+                title: "Couldn’t Prepare Dylib",
+                message: error.localizedDescription
+            )
+        }
+    }
+
+    func handleDylibExport(_ result: Result<URL, any Error>) {
+        switch result {
+        case .success(let url):
+            workspaceAlert = WorkspaceAlert(
+                title: "Dylib Exported",
+                message:
+                    "Saved \(url.lastPathComponent) to \(url.deletingLastPathComponent().path)."
+            )
+        case .failure(let error):
+            workspaceAlert = WorkspaceAlert(
+                title: "Couldn’t Export Dylib",
+                message: error.localizedDescription
+            )
+        }
+        dylibExportDocument = nil
     }
 
     func openProject(at projectURL: URL) {
@@ -339,7 +407,9 @@ final class WorkspaceModel: ObservableObject {
     }
 
     func buildDylib() {
-        guard canBuild, let project = patchProject else {
+        guard canBuild, let project = patchProject,
+            case .loaded(let loadedTarget) = phase
+        else {
             workspaceAlert = WorkspaceAlert(
                 title: "Project Isn’t Buildable",
                 message: "Fix the project and architecture validation errors before building."
@@ -350,6 +420,7 @@ final class WorkspaceModel: ObservableObject {
         let buildID = UUID()
         let previousArtifact = buildState.artifact
         self.buildID = buildID
+        verificationState = .idle
         buildState = .building(
             PatchBuildProgress(
                 phase: .preparing,
@@ -360,6 +431,8 @@ final class WorkspaceModel: ObservableObject {
             previousArtifact: previousArtifact
         )
         let buildService = buildService
+        let verificationService = verificationService
+        let targetInspection = loadedTarget.inspection
         let handleProgress: @MainActor @Sendable (PatchBuildProgress) -> Void = {
             [weak self] progress in
             guard self?.buildID == buildID else { return }
@@ -382,13 +455,29 @@ final class WorkspaceModel: ObservableObject {
                     Self.removeBuildArtifact(artifact)
                     return
                 }
-                self.buildID = nil
                 if let previousArtifact,
                     previousArtifact.workspaceURL != artifact.workspaceURL
                 {
                     Self.removeBuildArtifact(previousArtifact)
                 }
                 self.buildState = .succeeded(artifact)
+                self.verificationState = .verifying
+
+                do {
+                    let report = try await Task.detached(priority: .userInitiated) {
+                        try verificationService.verify(
+                            artifact: artifact,
+                            targetInspection: targetInspection
+                        )
+                    }.value
+                    guard self.buildID == buildID else { return }
+                    self.buildID = nil
+                    self.verificationState = .verified(report)
+                } catch {
+                    guard self.buildID == buildID else { return }
+                    self.buildID = nil
+                    self.verificationState = .failed(PatchVerificationFailure(error: error))
+                }
             } catch {
                 guard let self, self.buildID == buildID else { return }
                 self.buildID = nil
@@ -474,6 +563,15 @@ final class WorkspaceModel: ObservableObject {
         case .idle, .stale:
             break
         }
+        if buildState.artifact == nil {
+            verificationState = .idle
+        } else {
+            verificationState = .unavailable(
+                "The project changed after this dylib was built. Rebuild to verify it again."
+            )
+        }
+        isDylibExporterPresented = false
+        dylibExportDocument = nil
     }
 
     private func resetBuildState(removingArtifact: Bool) {
@@ -483,6 +581,9 @@ final class WorkspaceModel: ObservableObject {
             Self.removeBuildArtifact(artifact)
         }
         buildState = .idle
+        verificationState = .idle
+        isDylibExporterPresented = false
+        dylibExportDocument = nil
     }
 
     private nonisolated static func removeBuildArtifact(_ artifact: PatchBuildArtifact) {

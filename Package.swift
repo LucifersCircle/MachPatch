@@ -22,6 +22,7 @@ let package = Package(
             name: "MachPatchApp",
             dependencies: [
                 "MachPatchAnalyzer", "MachPatchBuilder", "MachPatchCore", "MachPatchGenerator",
+                "MachPatchVerifier",
             ]
         ),
         .executableTarget(
@@ -78,6 +79,7 @@ let package = Package(
             name: "AppTests",
             dependencies: [
                 "MachPatchApp", "MachPatchBuilder", "MachPatchCore", "MachPatchGenerator",
+                "MachPatchVerifier",
             ]
         ),
     ]
