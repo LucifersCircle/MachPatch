@@ -14,6 +14,10 @@ struct MachPatchCommand {
           resolve <path>         Resolve an IPA, .app, or Mach-O executable.
           inspect <path> [--json]
                                  Inspect every Mach-O slice and load command.
+          classes <path> [--json]
+                                 List normalized Objective-C classes.
+          methods <path> <class> [--json]
+                                 List methods declared by an Objective-C class.
 
         OPTIONS:
           --version             Show the MachPatch version.
@@ -45,6 +49,24 @@ struct MachPatchCommand {
                 exit(EX_USAGE)
             }
             inspect(path: arguments[1])
+        case "classes":
+            guard
+                arguments.count == 2
+                    || (arguments.count == 3 && arguments[2] == "--json")
+            else {
+                writeError("Usage: machpatch classes <path> [--json]\n")
+                exit(EX_USAGE)
+            }
+            classes(path: arguments[1])
+        case "methods":
+            guard
+                arguments.count == 3
+                    || (arguments.count == 4 && arguments[3] == "--json")
+            else {
+                writeError("Usage: machpatch methods <path> <class> [--json]\n")
+                exit(EX_USAGE)
+            }
+            methods(path: arguments[1], className: arguments[2])
         default:
             writeError("Unknown command or option: \(arguments[0])\n\n\(help)\n")
             exit(EX_USAGE)
@@ -84,4 +106,111 @@ struct MachPatchCommand {
         data.append(0x0A)
         FileHandle.standardOutput.write(data)
     }
+
+    private static func classes(path: String) {
+        do {
+            try InputResolver().withResolvedTarget(at: URL(filePath: path)) { target in
+                let analysis = try ObjectiveCAnalyzer().analyze(target)
+                try writeJSON(
+                    ClassListOutput(
+                        target: analysis.target,
+                        sliceIndex: analysis.sliceIndex,
+                        architecture: analysis.architecture,
+                        backend: analysis.backend,
+                        warnings: analysis.warnings,
+                        classes: analysis.metadata.classes.map(ObjectiveCClassSummary.init)
+                    )
+                )
+            }
+        } catch {
+            writeError("error: \(error.localizedDescription)\n")
+            exit(EXIT_FAILURE)
+        }
+    }
+
+    private static func methods(path: String, className: String) {
+        do {
+            try InputResolver().withResolvedTarget(at: URL(filePath: path)) { target in
+                let analysis = try ObjectiveCAnalyzer().analyze(target)
+                guard
+                    let objectiveCClass = analysis.metadata.classes.first(where: {
+                        $0.name == className
+                    })
+                else {
+                    throw CLIError("Objective-C class was not found: \(className)")
+                }
+                try writeJSON(
+                    MethodListOutput(
+                        target: analysis.target,
+                        sliceIndex: analysis.sliceIndex,
+                        architecture: analysis.architecture,
+                        backend: analysis.backend,
+                        warnings: analysis.warnings,
+                        className: objectiveCClass.name,
+                        instanceMethods: objectiveCClass.instanceMethods,
+                        classMethods: objectiveCClass.classMethods
+                    )
+                )
+            }
+        } catch {
+            writeError("error: \(error.localizedDescription)\n")
+            exit(EXIT_FAILURE)
+        }
+    }
+}
+
+private struct ClassListOutput: Encodable {
+    let target: ResolvedTarget
+    let sliceIndex: Int
+    let architecture: MachOArchitecture
+    let backend: ObjectiveCAnalyzerBackend
+    let warnings: [String]
+    let classes: [ObjectiveCClassSummary]
+}
+
+private struct ObjectiveCClassSummary: Encodable {
+    let name: String
+    let superclassName: String?
+    let imageName: String?
+    let isLikelyAppDefined: Bool
+    let isObjectiveCVisibleSwift: Bool
+    let instanceMethodCount: Int
+    let classMethodCount: Int
+    let propertyCount: Int
+    let ivarCount: Int
+    let protocols: [String]
+
+    init(_ objectiveCClass: ObjectiveCClass) {
+        name = objectiveCClass.name
+        superclassName = objectiveCClass.superclassName
+        imageName = objectiveCClass.imageName
+        isLikelyAppDefined = objectiveCClass.isLikelyAppDefined
+        isObjectiveCVisibleSwift = objectiveCClass.isObjectiveCVisibleSwift
+        instanceMethodCount = objectiveCClass.instanceMethods.count
+        classMethodCount = objectiveCClass.classMethods.count
+        propertyCount = objectiveCClass.properties.count
+        ivarCount = objectiveCClass.ivars.count
+        protocols = objectiveCClass.protocols
+    }
+}
+
+private struct MethodListOutput: Encodable {
+    let target: ResolvedTarget
+    let sliceIndex: Int
+    let architecture: MachOArchitecture
+    let backend: ObjectiveCAnalyzerBackend
+    let warnings: [String]
+    let className: String
+    let instanceMethods: [ObjectiveCMethod]
+    let classMethods: [ObjectiveCMethod]
+}
+
+private struct CLIError: Error, LocalizedError {
+    let message: String
+
+    init(_ message: String) {
+        self.message = message
+    }
+
+    var errorDescription: String? { message }
 }

@@ -24,7 +24,8 @@ let package = Package(
         .target(name: "MachPatchCore"),
         .target(
             name: "MachPatchAnalyzer",
-            dependencies: ["MachPatchCore"]
+            dependencies: ["MachPatchCore"],
+            resources: [.copy("Resources/lief_objc_analyzer.py")]
         ),
         .target(
             name: "MachPatchGenerator",

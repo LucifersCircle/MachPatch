@@ -82,6 +82,33 @@ For example, an ordinary decrypted device executable reports facts such as:
 }
 ```
 
+## Inspect Objective-C metadata
+
+`classes` emits stable JSON summaries for Objective-C classes in the selected executable slice:
+
+```bash
+.build/debug/machpatch classes "/path/to/Fixture.ipa"
+```
+
+Each summary includes its superclass, declared method/property/ivar counts, adopted protocols,
+Objective-C-visible Swift status, and the explicitly heuristic `isLikelyAppDefined` flag.
+
+`methods` returns the instance and class methods declared by one exact class name, including raw
+Objective-C type encodings and implementation addresses when the analyzer can recover them:
+
+```bash
+.build/debug/machpatch methods "/path/to/Fixture.ipa" FixtureViewController
+```
+
+The analyzer first probes the bundled Python bridge for LIEF Extended Objective-C support. When
+that optional capability is unavailable, it records the reason in `warnings` and falls back to
+Apple's `xcrun otool`. The fallback resolves selector references against the executable's method
+name and selector-reference sections; it never assigns a global selector to a class without an
+address relationship.
+
+Both commands reject an encrypted slice before metadata extraction. `--json` is accepted for
+script compatibility; JSON is the only output format during the CLI-first implementation.
+
 ## Development tools
 
 The repository includes configuration for `swift-format` and SwiftLint. When those tools are
@@ -100,6 +127,6 @@ and implementation constraints.
 
 ## Project status
 
-Safe input resolution and native thin/fat Mach-O inspection are implemented. Objective-C metadata
-extraction and the macOS interface are intentionally deferred until the remaining command-line
-pipeline is reliable.
+Safe input resolution, native thin/fat Mach-O inspection, and normalized Objective-C metadata
+extraction are implemented. Patch schema and type decoding are the next command-line milestone;
+the macOS interface remains deferred until the complete CLI pipeline is reliable.

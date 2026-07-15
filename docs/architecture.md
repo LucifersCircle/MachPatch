@@ -26,7 +26,8 @@ MachPatchVerifier -> MachPatchAnalyzer + MachPatchCore
 MachPatchPackager -> MachPatchBuilder + MachPatchVerifier + MachPatchCore
 ```
 
-The CLI will add direct dependencies on feature modules as their commands are implemented.
+The CLI depends directly on `MachPatchAnalyzer` and `MachPatchCore`; later commands will add the
+remaining feature modules as their APIs become available.
 
 ## Input resolution
 
@@ -69,8 +70,37 @@ The reader currently normalizes:
 - dylib identity and load, weak, re-export, upward, and lazy dependencies.
 
 Unknown CPU subtypes and platform values remain `unknown` with their raw numeric fields intact.
-The parser reports these facts only. Future architecture-selection policy belongs in the builder
+The parser reports these facts only. Architecture-selection policy belongs in the builder
 layer and must not be added to `MachOInspector`.
+
+## Objective-C metadata extraction
+
+`ObjectiveCAnalyzer` exposes normalized `Codable` and `Sendable` models that do not expose a
+backend's native object model. It rejects encrypted slices, invokes providers in priority order,
+and records unavailable or failed providers as warnings whenever a later provider succeeds.
+
+The provider chain is:
+
+```text
+Bundled Python helper -> LIEF Extended Objective-C API
+                     -> xcrun otool fallback
+                     -> normalized ObjectiveCMetadata
+```
+
+The LIEF helper is a replaceable proof-of-concept boundary. It produces JSON internally and is
+available only when the active `python3` environment contains LIEF Extended Objective-C support.
+The ordinary LIEF package does not provide that Extended API.
+
+The development fallback parses Apple's `otool -ov` output. Some chained-fixup binaries print a
+selector-reference address instead of a selector at each method record. In that case the provider
+also reads `__objc_methname` and the `__objc_selrefs` sections, then resolves only exact pointer
+relationships. Unresolved method references fail extraction rather than merging selectors by a
+global name list. Classes, methods, properties, ivars, protocols, and categories are normalized,
+sorted, and assigned deterministic IDs at the shared boundary.
+
+`isLikelyAppDefined` is intentionally heuristic. It currently means metadata came from the main
+executable and the class name did not match a small known third-party SDK marker list. It must
+never be presented as conclusive first-party ownership.
 
 ## Design constraints
 
@@ -84,11 +114,11 @@ layer and must not be added to `MachOInspector`.
 - Do not begin the SwiftUI application until the CLI produces and verifies a working arm64
   dylib.
 
-## Initial milestones
+## Completed milestones
 
 1. Bootstrap the package, CLI shell, tests, CI, and documentation.
 2. Resolve IPA, `.app`, and direct Mach-O inputs to an executable and hash.
 3. Inspect thin and fat Mach-O slices, platforms, deployment versions, encryption, and linked
    libraries.
-
-Objective-C metadata extraction begins only after all three milestones are independently tested.
+4. Extract and normalize Objective-C classes, methods, properties, ivars, protocols, and
+   categories behind a replaceable provider boundary.
