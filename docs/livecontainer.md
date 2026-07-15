@@ -1,4 +1,4 @@
-# LiveContainer export
+# LiveContainer testing
 
 The primary artifact is a plain, self-contained iPhoneOS dylib. Verification is a preflight audit;
 it cannot prove that a particular LiveContainer version will load a dylib or that a runtime patch
@@ -43,5 +43,65 @@ matching slices.
 ## Result meaning
 
 `Ready for LiveContainer testing` means static preflight checks passed. It does not mean the patch
-has already been exercised on a device. The next milestone records constructor execution,
-immediate and delayed class patching, functional patch behavior, and loader limitations.
+has already been exercised on a device. Class methods are installed on the metaclass. Actions that
+preserve behavior store a typed original IMP; direct-return actions do not. Missing classes are
+retried on the main queue at 1, 3, and 8 seconds before being marked failed.
+
+## Import and test workflow
+
+LiveContainer versions may use different labels for their app and dylib management controls. The
+device workflow is otherwise the same:
+
+1. Import the authorized decrypted IPA into LiveContainer.
+2. Build the patch dylib against that exact IPA, app bundle, or executable.
+3. Run `machpatch verify` with the same target and resolve every blocking result.
+4. Transfer the verified plain `.dylib` to the device and add it to the imported app using
+   LiveContainer's dylib-loading controls.
+5. Enable only the dylib under test. Disable older probes or patches that target the same method.
+6. Fully terminate the guest app after changing its dylib selection, then launch it again through
+   LiveContainer.
+7. Exercise the patched behavior. For log-only actions, use LiveContainer's logs when available or
+   temporarily pair the action with a visible, target-specific test signal.
+
+MachPatch does not copy artifacts into LiveContainer, modify an IPA, sign an app, or manage the
+guest process. The exported dylib is intentionally the handoff boundary.
+
+## Milestone 9 device acceptance
+
+The following behaviors were exercised with a decrypted arm64 iPhoneOS target whose minimum
+deployment version was iOS 15.6. Each dylib passed `machpatch verify --target` before import:
+
+- A constructor loaded without jailbreak libraries and installed an immediate Objective-C method
+  replacement. A UIKit alert from that replacement appeared and the app remained stable.
+- A schema-generated Boolean replacement changed `-[SettingsViewController debugOn]` from `NO` to
+  `YES`; the app visibly selected its Debug option.
+- An original-result action called the saved typed IMP, observed `NO`, logged the value, returned
+  the same value, and emitted its one-time confirmation signal.
+- A synthetic Objective-C class was absent during dylib initialization, registered later with an
+  original `NO` method, and was changed to `YES` by the generated one-second retry.
+- A synthetic late class deliberately supplied `q16@0:8` where the patch expected `B16@0:8`.
+  Generated code took the unexpected-encoding logging branch, entered the permanent failed state,
+  left the original method unchanged, and did not crash the process.
+
+These checks cover the Milestone 9 runtime contract. They do not guarantee that an unrelated app,
+OS version, architecture, or LiveContainer release behaves identically.
+
+## Known limitations
+
+- LiveContainer may not expose guest `NSLog` output in every configuration. Visible probes are a
+  testing aid, not part of normal generated patches.
+- Loading and signing are owned by LiveContainer. Passing static verification cannot prove that a
+  particular LiveContainer build will accept or execute the dylib.
+- Patch projects are bound to an executable hash, architecture/subtype, selector, and exact method
+  type encoding. Re-analyze the target and rebuild after any app update.
+- Retries are deliberately finite. A class that is still absent after the 8-second attempt is
+  marked failed for the life of that process.
+- Multiple dylibs can replace the same method in load-order-dependent ways. Isolate one test dylib
+  at a time and fully restart the guest app between tests.
+- The current patch model targets discovered Objective-C methods. It does not patch pure Swift,
+  C, or C++ functions, and stripped or dynamically synthesized metadata may not be discoverable.
+- Entitlements, anti-tamper logic, app-specific integrity checks, or OS policy can still prevent a
+  verified dylib from loading or an otherwise valid app from running.
+- Decrypted IPAs, extracted app bundles, executables, signing material, and device logs must remain
+  outside the repository. Commit only source, documentation, synthetic fixtures, and hashes that
+  are intentionally public.

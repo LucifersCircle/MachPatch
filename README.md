@@ -193,7 +193,8 @@ with the supplied target. Simulator output, legacy arm64e, Substrate/ElleKit/lib
 unbundled third-party dependencies, development-machine install names, and incompatible targets
 are blocking failures.
 
-See [docs/livecontainer.md](docs/livecontainer.md) for the verification policy and report fields.
+See [docs/livecontainer.md](docs/livecontainer.md) for the verification policy, device import and
+test workflow, Milestone 9 acceptance record, and known loader limitations.
 
 ## Development tools
 
