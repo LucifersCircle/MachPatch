@@ -109,6 +109,23 @@ address relationship.
 Both commands reject an encrypted slice before metadata extraction. `--json` is accepted for
 script compatibility; JSON is the only output format during the CLI-first implementation.
 
+## Measure patchability
+
+`patchability` classifies every Objective-C method declaration using the same signature rules as
+project validation and the patch editor:
+
+```bash
+.build/debug/machpatch patchability "/path/to/Fixture.ipa"
+.build/debug/machpatch patchability "/path/to/Fixture.ipa" --json
+```
+
+Human-readable output summarizes declarations available in the editor, compatible category
+declarations that are not exposed yet, unavailable declarations, reason counts, and the most
+common unsupported ABI types. `--json` emits the complete deterministic report, including every
+class/category origin, selector, raw and decoded signature, compatible action list, and exact
+unavailable issues. Counts describe metadata declarations; a class and category that declare the
+same runtime selector are intentionally separate until category canonicalization is implemented.
+
 ## Validate a patch project
 
 Patch projects are versioned JSON with immutable target identity, build settings, method patches,
@@ -227,6 +244,9 @@ Debian export requires a verified ordinary arm64 build and a target bundle ident
 does not guess package architecture metadata for arm64e or universal outputs. Theos and Frida
 exports are intentionally deferred; they are not required to build, inspect, or reproduce the
 native runtime patch.
+
+The next implementation phases and their acceptance gates are tracked in
+[docs/implementation-roadmap.md](docs/implementation-roadmap.md).
 
 ## Development tools
 

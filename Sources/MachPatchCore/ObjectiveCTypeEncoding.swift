@@ -48,7 +48,7 @@ public struct ObjectiveCType: Codable, Equatable, Sendable {
     }
 }
 
-public enum ObjectiveCTypeKind: String, Codable, Equatable, Sendable {
+public enum ObjectiveCTypeKind: String, Codable, Equatable, Hashable, Sendable {
     case void
     case boolean
     case signedChar

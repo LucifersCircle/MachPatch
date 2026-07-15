@@ -12,11 +12,105 @@ struct TargetSummaryView: View {
                 targetDetails
                 architectureDetails
                 analysisDetails
+                if let report = loadedTarget.patchabilityReport {
+                    patchabilityDetails(report)
+                }
             }
             .frame(maxWidth: 940, alignment: .leading)
             .padding(28)
         }
         .navigationTitle(displayName)
+    }
+
+    private func patchabilityDetails(_ report: ObjectiveCPatchabilityReport) -> some View {
+        let summary = report.summary
+        return GroupBox("Patchability") {
+            VStack(alignment: .leading, spacing: 14) {
+                Label(
+                    "\(summary.patchableClassMethodCount) method declarations are available in the editor",
+                    systemImage: "checkmark.seal.fill"
+                )
+                .foregroundStyle(.green)
+
+                Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 9) {
+                    patchabilityRow("All declarations", summary.methodCount)
+                    patchabilityRow("Class declarations", summary.classMethodCount)
+                    patchabilityRow("Category declarations", summary.categoryMethodCount)
+                    patchabilityRow(
+                        "Patchable category opportunities",
+                        summary.patchableCategoryMethodCount
+                    )
+                    patchabilityRow("Unavailable declarations", summary.unavailableMethodCount)
+                }
+
+                if !summary.issueCounts.isEmpty {
+                    Divider()
+                    Text("Why declarations are unavailable")
+                        .font(.headline)
+                    ForEach(summary.issueCounts, id: \.code) { issue in
+                        HStack {
+                            Text(issue.code.displayName)
+                            Spacer()
+                            Text(issue.count, format: .number)
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                    }
+                }
+
+                if !summary.unsupportedTypeCounts.isEmpty {
+                    Divider()
+                    Text("Most common unsupported ABI types")
+                        .font(.headline)
+                    ForEach(
+                        Array(summary.unsupportedTypeCounts.prefix(8).enumerated()),
+                        id: \.offset
+                    ) { _, item in
+                        HStack(alignment: .firstTextBaseline) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(
+                                    "\(unsupportedTypeRole(item.role)) · \(item.typeKind.rawValue)")
+                                Text(item.typeEncoding)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                            }
+                            Spacer()
+                            Text(item.count, format: .number)
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                    }
+                }
+
+                Text(
+                    "Counts describe metadata declarations. Compatible category methods are measured here but will enter the editor in the next implementation phase."
+                )
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 8)
+        }
+    }
+
+    private func patchabilityRow(_ label: String, _ count: Int) -> some View {
+        GridRow {
+            Text(label)
+                .foregroundStyle(.secondary)
+                .frame(width: 230, alignment: .leading)
+            Text(count, format: .number)
+                .monospacedDigit()
+        }
+    }
+
+    private func unsupportedTypeRole(_ role: ObjectiveCUnsupportedTypeRole) -> String {
+        switch role {
+        case .returnValue:
+            "Return"
+        case .argument:
+            "Argument"
+        }
     }
 
     private var header: some View {

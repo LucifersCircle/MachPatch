@@ -63,6 +63,11 @@ final class WorkspaceModelTests: XCTestCase {
         await waitForAnalysisToFinish(model)
 
         XCTAssertEqual(model.analysis, analysis)
+        guard case .loaded(let analyzedTarget) = model.phase else {
+            return XCTFail("Expected an analyzed target")
+        }
+        XCTAssertEqual(analyzedTarget.patchabilityReport?.summary.classMethodCount, 2)
+        XCTAssertEqual(analyzedTarget.patchabilityReport?.summary.patchableClassMethodCount, 2)
     }
 
     func testClassFiltersSearchMethodsAndSelection() async throws {
@@ -1031,7 +1036,8 @@ final class WorkspaceModelTests: XCTestCase {
             inspection: inspection,
             architectureReport: ArchitectureResolver.report(for: inspection.slices),
             iconData: nil,
-            analysisState: .requiresSliceSelection
+            analysisState: .requiresSliceSelection,
+            patchabilityReport: nil
         )
     }
 
@@ -1111,9 +1117,12 @@ private struct SuccessfulLoader: TargetLoading {
         at inputURL: URL,
         expectedSHA256: String,
         sliceIndex: Int
-    ) async throws -> ObjectiveCAnalysis {
+    ) async throws -> LoadedObjectiveCAnalysis {
         guard let analysis else { throw StubError.failed }
-        return analysis
+        return LoadedObjectiveCAnalysis(
+            analysis: analysis,
+            patchabilityReport: ObjectiveCPatchabilityAnalyzer.report(for: analysis.metadata)
+        )
     }
 }
 
@@ -1266,7 +1275,7 @@ private struct FailingLoader: TargetLoading {
         at inputURL: URL,
         expectedSHA256: String,
         sliceIndex: Int
-    ) async throws -> ObjectiveCAnalysis {
+    ) async throws -> LoadedObjectiveCAnalysis {
         throw StubError.failed
     }
 }

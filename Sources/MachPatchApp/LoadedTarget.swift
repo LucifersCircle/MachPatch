@@ -9,17 +9,37 @@ struct LoadedTarget: Equatable, Sendable {
     let architectureReport: TargetArchitectureReport
     let iconData: Data?
     let analysisState: TargetAnalysisState
+    let patchabilityReport: ObjectiveCPatchabilityReport?
 
-    func replacingAnalysisState(_ state: TargetAnalysisState) -> LoadedTarget {
-        LoadedTarget(
+    func replacingAnalysisState(
+        _ state: TargetAnalysisState,
+        patchabilityReport: ObjectiveCPatchabilityReport? = nil
+    ) -> LoadedTarget {
+        let resolvedPatchabilityReport: ObjectiveCPatchabilityReport?
+        if let patchabilityReport {
+            resolvedPatchabilityReport = patchabilityReport
+        } else if case .loaded(let analysis) = state {
+            resolvedPatchabilityReport = ObjectiveCPatchabilityAnalyzer.report(
+                for: analysis.metadata
+            )
+        } else {
+            resolvedPatchabilityReport = nil
+        }
+        return LoadedTarget(
             inputURL: inputURL,
             target: target,
             inspection: inspection,
             architectureReport: architectureReport,
             iconData: iconData,
-            analysisState: state
+            analysisState: state,
+            patchabilityReport: resolvedPatchabilityReport
         )
     }
+}
+
+struct LoadedObjectiveCAnalysis: Equatable, Sendable {
+    let analysis: ObjectiveCAnalysis
+    let patchabilityReport: ObjectiveCPatchabilityReport
 }
 
 enum TargetAnalysisState: Equatable, Sendable {

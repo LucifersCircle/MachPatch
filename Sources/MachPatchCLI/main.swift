@@ -22,6 +22,8 @@ struct MachPatchCommand {
                                  List normalized Objective-C classes.
           methods <path> <class> [--json]
                                  List methods declared by an Objective-C class.
+          patchability <path> [--json]
+                                 Report editable and unsupported Objective-C methods.
           validate-project <project> [--target <path>]
                                  Validate a patch project, optionally against a target.
           generate <project> --output <directory>
@@ -86,6 +88,15 @@ struct MachPatchCommand {
                 exit(EX_USAGE)
             }
             methods(path: arguments[1], className: arguments[2])
+        case "patchability":
+            guard
+                arguments.count == 2
+                    || (arguments.count == 3 && arguments[2] == "--json")
+            else {
+                writeError("Usage: machpatch patchability <path> [--json]\n")
+                exit(EX_USAGE)
+            }
+            patchability(path: arguments[1], json: arguments.count == 3)
         case "validate-project":
             guard
                 arguments.count == 2
@@ -231,6 +242,30 @@ struct MachPatchCommand {
                         classMethods: objectiveCClass.classMethods
                     )
                 )
+            }
+        } catch {
+            writeError("error: \(error.localizedDescription)\n")
+            exit(EXIT_FAILURE)
+        }
+    }
+
+    private static func patchability(path: String, json: Bool) {
+        do {
+            try InputResolver().withResolvedTarget(at: URL(filePath: path)) { target in
+                let analysis = try ObjectiveCAnalyzer().analyze(target)
+                let output = PatchabilityCommandOutput(
+                    target: analysis.target,
+                    sliceIndex: analysis.sliceIndex,
+                    architecture: analysis.architecture,
+                    backend: analysis.backend,
+                    warnings: analysis.warnings,
+                    report: ObjectiveCPatchabilityAnalyzer.report(for: analysis.metadata)
+                )
+                if json {
+                    try writeJSON(output)
+                } else {
+                    print(HumanPatchabilityReportFormatter.render(output), terminator: "")
+                }
             }
         } catch {
             writeError("error: \(error.localizedDescription)\n")
@@ -449,6 +484,65 @@ private struct MethodListOutput: Encodable {
     let className: String
     let instanceMethods: [ObjectiveCMethod]
     let classMethods: [ObjectiveCMethod]
+}
+
+private struct PatchabilityCommandOutput: Encodable {
+    let target: ResolvedTarget
+    let sliceIndex: Int
+    let architecture: MachOArchitecture
+    let backend: ObjectiveCAnalyzerBackend
+    let warnings: [String]
+    let report: ObjectiveCPatchabilityReport
+}
+
+private enum HumanPatchabilityReportFormatter {
+    static func render(_ output: PatchabilityCommandOutput) -> String {
+        let summary = output.report.summary
+        var lines = [
+            "Patchability: \(output.target.executableName)",
+            "Architecture: \(output.architecture.rawValue) (slice \(output.sliceIndex))",
+            "Metadata backend: \(output.backend.rawValue)",
+            "Method declarations: \(summary.methodCount)",
+            "Available in editor: \(summary.patchableClassMethodCount)",
+            "Additional patchable category declarations: \(summary.patchableCategoryMethodCount)",
+            "Unavailable declarations: \(summary.unavailableMethodCount)",
+        ]
+
+        if !summary.issueCounts.isEmpty {
+            lines.append("")
+            lines.append("Unavailable reason occurrences:")
+            lines.append(
+                contentsOf: summary.issueCounts.map {
+                    "  \($0.count)  \($0.code.displayName)"
+                })
+        }
+
+        if !summary.unsupportedTypeCounts.isEmpty {
+            lines.append("")
+            lines.append("Unsupported ABI types:")
+            lines.append(
+                contentsOf: summary.unsupportedTypeCounts.prefix(15).map {
+                    "  \($0.count)  \(roleLabel($0.role)) \($0.typeKind.rawValue) (\($0.typeEncoding))"
+                })
+        }
+
+        if !output.warnings.isEmpty {
+            lines.append("")
+            lines.append("Analyzer warnings:")
+            lines.append(contentsOf: output.warnings.map { "  - \($0)" })
+        }
+
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    private static func roleLabel(_ role: ObjectiveCUnsupportedTypeRole) -> String {
+        switch role {
+        case .returnValue:
+            "return"
+        case .argument:
+            "argument"
+        }
+    }
 }
 
 private struct CLIError: Error, LocalizedError {

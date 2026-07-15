@@ -115,6 +115,12 @@ unsupported ABI shapes so validation can reject them explicitly instead of miscl
 `MachPatchAnalyzer` adds target-backed validation by selecting the exact architecture/subtype and
 checking the current class, selector, method kind, and raw encoding.
 
+`ObjectiveCPatchabilityAnalyzer` applies that shared compatibility policy to every class and
+category method declaration. Its deterministic report distinguishes editor-available class
+declarations from compatible category opportunities, records stable unavailable reason codes, and
+ranks exact unsupported return/argument encodings. The CLI and SwiftUI target summary consume the
+same report model; neither frontend maintains a separate list of supported signatures.
+
 ## Objective-C source generation
 
 `MachPatchGenerator` converts a structurally valid version 1 project into one deterministic
@@ -212,3 +218,8 @@ blocking check fails.
     export workflow.
 11. Export deterministic source archives and ordinary-arm64 Debian archives while keeping the
     plain dylib primary. Theos and Frida outputs are deferred by product scope.
+12. Add composable advanced behavior, Foundation object presets, expert Objective-C snippets,
+    target-aware private patch storage, import/export workflows, and native macOS File commands.
+
+Post-version-0.1 coverage and release work is tracked in
+[implementation-roadmap.md](implementation-roadmap.md).

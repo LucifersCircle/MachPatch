@@ -128,12 +128,17 @@ final class WorkspaceModel: ObservableObject {
         resetBuildState(removingArtifact: true)
         analysisTask?.cancel()
         navigation = .target
-        phase = .loaded(loadedTarget.replacingAnalysisState(.loading(sliceIndex: sliceIndex)))
+        phase = .loaded(
+            loadedTarget.replacingAnalysisState(
+                .loading(sliceIndex: sliceIndex),
+                patchabilityReport: nil
+            )
+        )
         let loader = loader
 
         analysisTask = Task { [weak self] in
             do {
-                let analysis = try await loader.loadAnalysis(
+                let loadedAnalysis = try await loader.loadAnalysis(
                     at: loadedTarget.inputURL,
                     expectedSHA256: loadedTarget.target.sha256,
                     sliceIndex: sliceIndex
@@ -142,7 +147,11 @@ final class WorkspaceModel: ObservableObject {
                 guard case .loaded(let currentTarget) = self?.phase,
                     currentTarget.target.sha256 == loadedTarget.target.sha256
                 else { return }
-                let analyzedTarget = currentTarget.replacingAnalysisState(.loaded(analysis))
+                let analysis = loadedAnalysis.analysis
+                let analyzedTarget = currentTarget.replacingAnalysisState(
+                    .loaded(analysis),
+                    patchabilityReport: loadedAnalysis.patchabilityReport
+                )
                 self?.phase = .loaded(analyzedTarget)
                 self?.replaceProjectDraft(
                     PatchProjectDraft(loadedTarget: analyzedTarget),
@@ -157,7 +166,8 @@ final class WorkspaceModel: ObservableObject {
                 else { return }
                 self?.phase = .loaded(
                     currentTarget.replacingAnalysisState(
-                        .failed(sliceIndex: sliceIndex, message: error.localizedDescription)
+                        .failed(sliceIndex: sliceIndex, message: error.localizedDescription),
+                        patchabilityReport: nil
                     )
                 )
             }

@@ -10,7 +10,7 @@ protocol TargetLoading: Sendable {
         at inputURL: URL,
         expectedSHA256: String,
         sliceIndex: Int
-    ) async throws -> ObjectiveCAnalysis
+    ) async throws -> LoadedObjectiveCAnalysis
 }
 
 struct TargetLoader: TargetLoading {
@@ -28,16 +28,18 @@ struct TargetLoader: TargetLoading {
                 try Task.checkCancellation()
                 let inspection = try MachOInspector().inspect(target)
                 let architectureReport = ArchitectureResolver.report(for: inspection.slices)
+                let initialAnalysis = initialAnalysis(
+                    target: target,
+                    architectureReport: architectureReport
+                )
                 return LoadedTarget(
                     inputURL: inputURL,
                     target: target,
                     inspection: inspection,
                     architectureReport: architectureReport,
                     iconData: TargetIconLoader().loadIconData(for: target),
-                    analysisState: initialAnalysisState(
-                        target: target,
-                        architectureReport: architectureReport
-                    )
+                    analysisState: initialAnalysis.state,
+                    patchabilityReport: initialAnalysis.report
                 )
             }
         }.value
@@ -47,7 +49,7 @@ struct TargetLoader: TargetLoading {
         at inputURL: URL,
         expectedSHA256: String,
         sliceIndex: Int
-    ) async throws -> ObjectiveCAnalysis {
+    ) async throws -> LoadedObjectiveCAnalysis {
         try await Task.detached(priority: .userInitiated) {
             let hasSecurityScope = inputURL.startAccessingSecurityScopedResource()
             defer {
@@ -70,27 +72,37 @@ struct TargetLoader: TargetLoading {
                 else {
                     throw TargetLoadingError.unsupportedSlice(sliceIndex)
                 }
-                return try ObjectiveCAnalyzer().analyze(target, sliceIndex: sliceIndex)
+                let analysis = try ObjectiveCAnalyzer().analyze(target, sliceIndex: sliceIndex)
+                return LoadedObjectiveCAnalysis(
+                    analysis: analysis,
+                    patchabilityReport: ObjectiveCPatchabilityAnalyzer.report(
+                        for: analysis.metadata
+                    )
+                )
             }
         }.value
     }
 
-    private func initialAnalysisState(
+    private func initialAnalysis(
         target: ResolvedTarget,
         architectureReport: TargetArchitectureReport
-    ) -> TargetAnalysisState {
+    ) -> (state: TargetAnalysisState, report: ObjectiveCPatchabilityReport?) {
         let supportedSlices = architectureReport.slices.filter(\.supportedForPatching)
         guard !supportedSlices.isEmpty else {
-            return .unavailable(architectureReport.automaticReason)
+            return (.unavailable(architectureReport.automaticReason), nil)
         }
         guard supportedSlices.count == 1, let slice = supportedSlices.first else {
-            return .requiresSliceSelection
+            return (.requiresSliceSelection, nil)
         }
 
         do {
-            return .loaded(try ObjectiveCAnalyzer().analyze(target, sliceIndex: slice.index))
+            let analysis = try ObjectiveCAnalyzer().analyze(target, sliceIndex: slice.index)
+            return (
+                .loaded(analysis),
+                ObjectiveCPatchabilityAnalyzer.report(for: analysis.metadata)
+            )
         } catch {
-            return .failed(sliceIndex: slice.index, message: error.localizedDescription)
+            return (.failed(sliceIndex: slice.index, message: error.localizedDescription), nil)
         }
     }
 }

@@ -401,58 +401,30 @@ public enum PatchProjectValidator {
         selector: String,
         patchID: String
     ) -> [PatchProjectValidationIssue] {
-        var errors: [PatchProjectValidationIssue] = []
-        guard signature.arguments.count >= 2 else {
-            return [
-                issue(
-                    .invalidMethodSignature,
-                    "Method encoding must contain the implicit self and selector arguments.",
-                    patchID: patchID
-                )
-            ]
+        ObjectiveCPatchabilityAnalyzer.signatureIssues(for: signature, selector: selector).map {
+            issue(validationCode(for: $0.code), $0.message, patchID: patchID)
         }
-        if signature.arguments[0].kind != .object
-            || signature.arguments[1].kind != .selector
-        {
-            errors.append(
-                issue(
-                    .invalidMethodSignature,
-                    "Method encoding must begin with the implicit object and selector arguments ('@:').",
-                    patchID: patchID
-                )
-            )
-        }
+    }
 
-        let selectorArgumentCount = selector.filter { $0 == ":" }.count
-        if selectorArgumentCount != signature.explicitArguments.count {
-            errors.append(
-                issue(
-                    .invalidSelector,
-                    "Selector has \(selectorArgumentCount) parameter markers, but its encoding has \(signature.explicitArguments.count) explicit arguments.",
-                    patchID: patchID
-                )
-            )
+    private static func validationCode(
+        for patchabilityCode: ObjectiveCMethodPatchabilityIssueCode
+    ) -> PatchProjectValidationCode {
+        switch patchabilityCode {
+        case .invalidImplicitArguments:
+            .invalidMethodSignature
+        case .selectorArgumentCountMismatch:
+            .invalidSelector
+        case .unsupportedReturnType:
+            .unsupportedReturnType
+        case .unsupportedArgumentType:
+            .unsupportedArgumentType
+        case .noCompatibleActions:
+            .incompatibleAction
+        case .missingTypeEncoding:
+            .emptyTypeEncoding
+        case .invalidTypeEncoding:
+            .malformedTypeEncoding
         }
-        if !PatchActionCompatibility.isSupportedReturnType(signature.returnType.kind) {
-            errors.append(
-                issue(
-                    .unsupportedReturnType,
-                    "Return type '\(signature.returnType.encoding)' is unsupported for MVP patches.",
-                    patchID: patchID
-                )
-            )
-        }
-        for (index, argument) in signature.explicitArguments.enumerated()
-        where !PatchActionCompatibility.isSupportedArgumentType(argument.kind) {
-            errors.append(
-                issue(
-                    .unsupportedArgumentType,
-                    "Argument \(index + 1) type '\(argument.encoding)' is unsupported for MVP patches.",
-                    patchID: patchID
-                )
-            )
-        }
-        return errors
     }
 
     private static func issue(
