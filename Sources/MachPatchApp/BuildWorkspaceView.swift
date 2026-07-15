@@ -616,6 +616,49 @@ struct BuildWorkspaceView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(!model.canExportDylib)
                 .help(exportHelpText)
+
+                Divider()
+
+                Text("Optional Formats")
+                    .font(.subheadline.weight(.semibold))
+
+                Button {
+                    model.exportSourceBundle()
+                } label: {
+                    Label("Export Source Bundle (.zip)…", systemImage: "doc.zipper")
+                }
+                .buttonStyle(.bordered)
+                .disabled(!model.canExportSourceBundle)
+                .help(
+                    model.canExportSourceBundle
+                        ? "Export patch.json, deterministic generated source, and an Xcode rebuild script."
+                        : "A fresh successful build is required before source export."
+                )
+
+                Text(
+                    "A portable archive containing the canonical patch project, generated Objective-C, target identity, and a standalone build script."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                Button {
+                    model.exportDebianPackage()
+                } label: {
+                    Label("Export .deb…", systemImage: "shippingbox")
+                }
+                .buttonStyle(.bordered)
+                .disabled(!model.canExportDebianPackage)
+                .help(
+                    model.debianExportUnavailableReason
+                        ?? "Package the verified arm64 dylib with its MobileSubstrate filter plist."
+                )
+
+                Text(
+                    model.debianExportUnavailableReason
+                        ?? "For jailbreak package managers; the plain dylib remains the recommended LiveContainer output."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(8)

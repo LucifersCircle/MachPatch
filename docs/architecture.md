@@ -1,6 +1,6 @@
 # Architecture
 
-MachPatch uses a modular Swift package so command-line and future SwiftUI frontends can share
+MachPatch uses a modular Swift package so command-line and SwiftUI frontends can share
 the same implementation. Core libraries never depend on a user-interface target.
 
 ## Modules
@@ -24,11 +24,12 @@ MachPatchGenerator -> MachPatchCore
 MachPatchBuilder -> MachPatchAnalyzer + MachPatchGenerator + MachPatchCore
 MachPatchVerifier -> MachPatchAnalyzer + MachPatchCore
 MachPatchPackager -> MachPatchBuilder + MachPatchVerifier + MachPatchCore
+MachPatchApp -> shared analysis + generation + build + verification + packaging modules
 ```
 
-The CLI currently depends directly on `MachPatchAnalyzer`, `MachPatchBuilder`, `MachPatchCore`,
-`MachPatchGenerator`, and `MachPatchVerifier`. Packaging will add its feature module when that API
-becomes available.
+The CLI depends directly on the analysis, builder, core, generator, and verifier modules. The app
+also consumes the packager to present verified dylib, reproducible source-archive, and Debian
+package exports without duplicating archive or policy logic in SwiftUI.
 
 ## Input resolution
 
@@ -205,3 +206,9 @@ blocking check fails.
    selected toolchain, compare generated CPU metadata, and merge only validated universal slices.
 8. Verify LiveContainer compatibility with native facts, per-slice Apple-tool cross-checks,
    dependency/symbol/path policy, target comparison, text/JSON reports, and blocking status.
+9. Confirm constructor, immediate, original-result, late-loaded, and failed-patch behavior through
+   LiveContainer without a jailbreak-specific dependency.
+10. Provide the full SwiftUI import, browser, patch editor, project, build, verification, and dylib
+    export workflow.
+11. Export deterministic source archives and ordinary-arm64 Debian archives while keeping the
+    plain dylib primary. Theos and Frida outputs are deferred by product scope.

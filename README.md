@@ -196,6 +196,21 @@ are blocking failures.
 See [docs/livecontainer.md](docs/livecontainer.md) for the verification policy, device import and
 test workflow, Milestone 9 acceptance record, and known loader limitations.
 
+## Optional exports
+
+The SwiftUI build workspace keeps the verified plain dylib as the primary LiveContainer output.
+After a successful build it can also export:
+
+- a reproducible source `.zip` containing canonical `patch.json`, deterministic
+  `MachPatchGenerated.m`, target identity, and an executable Xcode/iPhoneOS `build.sh`; or
+- an ordinary-arm64 `.deb` containing the dylib and a bundle-specific MobileSubstrate filter
+  plist.
+
+Debian export requires a verified ordinary arm64 build and a target bundle identifier. MachPatch
+does not guess package architecture metadata for arm64e or universal outputs. Theos and Frida
+exports are intentionally deferred; they are not required to build, inspect, or reproduce the
+native runtime patch.
+
 ## Development tools
 
 The repository includes configuration for `swift-format` and SwiftLint. When those tools are
@@ -214,9 +229,8 @@ and implementation constraints.
 
 ## Project status
 
-Safe input resolution, native thin/fat Mach-O inspection, normalized Objective-C metadata
-extraction, patch schema/type validation, native Objective-C source generation, device dylib
-building, architecture resolution, modern arm64e capability probing, and validated universal
-output are implemented. LiveContainer compatibility verification now produces human-readable and
-JSON reports with blocking exit status. Real LiveContainer loading is Milestone 9. The full
-SwiftUI interface is Milestone 10, after successful LiveContainer testing.
+Safe input resolution, native Mach-O and Objective-C inspection, type-aware patch editing,
+deterministic source generation, device dylib building, architecture resolution, LiveContainer
+verification, and the complete SwiftUI workflow are implemented. Device acceptance covers
+immediate, original-call, and late-loaded class patches. Reproducible source archives and
+ordinary-arm64 Debian packages are available as optional outputs.

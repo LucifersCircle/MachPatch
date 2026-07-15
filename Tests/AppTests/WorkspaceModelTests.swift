@@ -373,6 +373,47 @@ final class WorkspaceModelTests: XCTestCase {
 
         XCTAssertEqual(model.workspaceAlert?.title, "Verification Required")
         XCTAssertFalse(model.isDylibExporterPresented)
+        XCTAssertTrue(model.canExportSourceBundle)
+        XCTAssertFalse(model.canExportDebianPackage)
+    }
+
+    func testOptionalExportsUseFreshBuildAndExposeExpectedFilenames() async {
+        let target = makeLoadedTarget()
+        let analysis = makeAnalysis(for: target)
+        let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
+        let model = WorkspaceModel(
+            loader: SuccessfulLoader(target: loadedTarget),
+            buildService: StubPatchBuildService(),
+            verificationService: StubPatchVerificationService()
+        )
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+        model.buildDylib()
+        await waitForVerificationToFinish(model)
+
+        XCTAssertTrue(model.canExportSourceBundle)
+        XCTAssertTrue(model.canExportDebianPackage)
+        XCTAssertEqual(model.defaultSourceBundleFilename, "FixturePatchSource.zip")
+        XCTAssertEqual(model.defaultDebianPackageFilename, "FixturePatch.deb")
+
+        model.exportSourceBundle()
+
+        XCTAssertTrue(model.isSourceBundleExporterPresented)
+        XCTAssertNotNil(model.sourceBundleExportDocument)
+
+        model.exportDebianPackage()
+
+        XCTAssertTrue(model.isDebianPackageExporterPresented)
+        XCTAssertNotNil(model.debianPackageExportDocument)
+
+        model.updateProjectName("Changed Project")
+
+        XCTAssertFalse(model.canExportSourceBundle)
+        XCTAssertFalse(model.canExportDebianPackage)
+        XCTAssertFalse(model.isSourceBundleExporterPresented)
+        XCTAssertFalse(model.isDebianPackageExporterPresented)
+        XCTAssertNil(model.sourceBundleExportDocument)
+        XCTAssertNil(model.debianPackageExportDocument)
     }
 
     func testVerificationExecutionFailureIsVisibleAndPreventsExport() async {
@@ -845,6 +886,7 @@ private final class StubPatchBuildService: PatchBuildServicing, @unchecked Senda
             withIntermediateDirectories: true
         )
         try? Data("test dylib".utf8).write(to: URL(filePath: record.outputPath))
+        try? Data("// test generated source\n".utf8).write(to: URL(filePath: record.sourcePath))
         return PatchBuildArtifact(workspaceURL: workspace, record: record)
     }
 }

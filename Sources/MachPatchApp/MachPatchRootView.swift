@@ -72,6 +72,20 @@ struct MachPatchRootView: View {
             defaultFilename: model.defaultDylibFilename,
             onCompletion: model.handleDylibExport
         )
+        .fileExporter(
+            isPresented: $model.isSourceBundleExporterPresented,
+            document: model.sourceBundleExportDocument,
+            contentType: .zip,
+            defaultFilename: model.defaultSourceBundleFilename,
+            onCompletion: model.handleSourceBundleExport
+        )
+        .fileExporter(
+            isPresented: $model.isDebianPackageExporterPresented,
+            document: model.debianPackageExportDocument,
+            contentType: .machPatchDebianPackage,
+            defaultFilename: model.defaultDebianPackageFilename,
+            onCompletion: model.handleDebianPackageExport
+        )
         .dropDestination(for: URL.self) { urls, _ in
             guard let inputURL = urls.first else { return false }
             model.openTarget(at: inputURL)

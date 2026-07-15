@@ -4,6 +4,7 @@ import MachPatchAnalyzer
 import MachPatchBuilder
 import MachPatchCore
 import MachPatchGenerator
+import MachPatchPackager
 import MachPatchVerifier
 
 @MainActor
@@ -19,6 +20,10 @@ final class WorkspaceModel: ObservableObject {
     @Published var isProjectExporterPresented = false
     @Published var isDylibExporterPresented = false
     @Published private(set) var dylibExportDocument: DylibExportDocument?
+    @Published var isSourceBundleExporterPresented = false
+    @Published private(set) var sourceBundleExportDocument: SourceBundleExportDocument?
+    @Published var isDebianPackageExporterPresented = false
+    @Published private(set) var debianPackageExportDocument: DebianPackageExportDocument?
     @Published var workspaceAlert: WorkspaceAlert?
     @Published var pendingProjectImport: PendingProjectImport?
     @Published private(set) var generatedSourcePreview: GeneratedSourcePreviewState =
@@ -222,6 +227,39 @@ final class WorkspaceModel: ObservableObject {
         return report.isReadyForLiveContainerTesting
     }
 
+    var canExportSourceBundle: Bool {
+        guard case .succeeded = buildState, patchProject != nil else { return false }
+        return true
+    }
+
+    var debianExportUnavailableReason: String? {
+        guard case .succeeded(let artifact) = buildState else {
+            return "Build the current patch project before creating a Debian package."
+        }
+        guard canExportDylib else {
+            return "A successful LiveContainer verification is required before Debian export."
+        }
+        guard artifact.record.architecture == .arm64 else {
+            return "Debian export currently supports ordinary arm64 output only."
+        }
+        guard patchProject?.target.bundleIdentifier?.isEmpty == false else {
+            return "A bundle identifier is required for the MobileSubstrate filter plist."
+        }
+        return nil
+    }
+
+    var canExportDebianPackage: Bool {
+        debianExportUnavailableReason == nil
+    }
+
+    var defaultSourceBundleFilename: String {
+        "\(projectDraft?.outputName ?? "MachPatch")Source.zip"
+    }
+
+    var defaultDebianPackageFilename: String {
+        "\(projectDraft?.outputName ?? "MachPatch").deb"
+    }
+
     func saveProject() {
         guard let projectDraft else {
             workspaceAlert = WorkspaceAlert(
@@ -295,6 +333,100 @@ final class WorkspaceModel: ObservableObject {
             )
         }
         dylibExportDocument = nil
+    }
+
+    func exportSourceBundle() {
+        guard case .succeeded(let artifact) = buildState,
+            let project = patchProject
+        else {
+            workspaceAlert = WorkspaceAlert(
+                title: "Fresh Build Required",
+                message: "Build the current patch project before exporting its source bundle."
+            )
+            return
+        }
+
+        do {
+            let archive = try PatchSourceArchiveBuilder().build(
+                project: project,
+                buildRecord: artifact.record,
+                sourceURL: artifact.sourceURL
+            )
+            sourceBundleExportDocument = SourceBundleExportDocument(archive: archive)
+            isSourceBundleExporterPresented = true
+        } catch {
+            workspaceAlert = WorkspaceAlert(
+                title: "Couldn’t Prepare Source Bundle",
+                message: error.localizedDescription
+            )
+        }
+    }
+
+    func handleSourceBundleExport(_ result: Result<URL, any Error>) {
+        handleOptionalExport(
+            result,
+            successTitle: "Source Bundle Exported",
+            failureTitle: "Couldn’t Export Source Bundle"
+        )
+        sourceBundleExportDocument = nil
+    }
+
+    func exportDebianPackage() {
+        guard debianExportUnavailableReason == nil,
+            case .succeeded(let artifact) = buildState,
+            let project = patchProject
+        else {
+            workspaceAlert = WorkspaceAlert(
+                title: "Debian Export Unavailable",
+                message: debianExportUnavailableReason
+                    ?? "Build and verify the current project before creating a Debian package."
+            )
+            return
+        }
+
+        do {
+            let package = try DebianPackageBuilder().build(
+                project: project,
+                buildRecord: artifact.record,
+                dylibURL: artifact.dylibURL
+            )
+            debianPackageExportDocument = DebianPackageExportDocument(package: package)
+            isDebianPackageExporterPresented = true
+        } catch {
+            workspaceAlert = WorkspaceAlert(
+                title: "Couldn’t Prepare Debian Package",
+                message: error.localizedDescription
+            )
+        }
+    }
+
+    func handleDebianPackageExport(_ result: Result<URL, any Error>) {
+        handleOptionalExport(
+            result,
+            successTitle: "Debian Package Exported",
+            failureTitle: "Couldn’t Export Debian Package"
+        )
+        debianPackageExportDocument = nil
+    }
+
+    private func handleOptionalExport(
+        _ result: Result<URL, any Error>,
+        successTitle: String,
+        failureTitle: String
+    ) {
+        switch result {
+        case .success(let url):
+            workspaceAlert = WorkspaceAlert(
+                title: successTitle,
+                message:
+                    "Saved \(url.lastPathComponent) to \(url.deletingLastPathComponent().path)."
+            )
+        case .failure(let error):
+            workspaceAlert = WorkspaceAlert(
+                title: failureTitle,
+                message: error.localizedDescription
+            )
+        }
     }
 
     func openProject(at projectURL: URL) {
@@ -572,6 +704,10 @@ final class WorkspaceModel: ObservableObject {
         }
         isDylibExporterPresented = false
         dylibExportDocument = nil
+        isSourceBundleExporterPresented = false
+        sourceBundleExportDocument = nil
+        isDebianPackageExporterPresented = false
+        debianPackageExportDocument = nil
     }
 
     private func resetBuildState(removingArtifact: Bool) {
@@ -584,6 +720,10 @@ final class WorkspaceModel: ObservableObject {
         verificationState = .idle
         isDylibExporterPresented = false
         dylibExportDocument = nil
+        isSourceBundleExporterPresented = false
+        sourceBundleExportDocument = nil
+        isDebianPackageExporterPresented = false
+        debianPackageExportDocument = nil
     }
 
     private nonisolated static func removeBuildArtifact(_ artifact: PatchBuildArtifact) {

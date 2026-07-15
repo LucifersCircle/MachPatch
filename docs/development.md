@@ -168,3 +168,19 @@ development-machine install names, unexpected unresolved symbols, and native/`li
 Run the command against a real Xcode-built thin and universal dylib as the final acceptance check.
 The text report must be readable, the JSON report must include `formatVersion`, checks, raw facts,
 tool executions, and `result`, and a blocking report must exit nonzero.
+
+## Optional-export acceptance checks
+
+```bash
+swift test --filter MachPatchPackagerTests
+```
+
+The source-bundle tests require a valid deterministic ZIP containing canonical `patch.json`,
+byte-identical generated source, target identity, and an executable build script. When Xcode and
+the iPhoneOS SDK are installed, the suite runs that script and confirms it produces an arm64 dylib.
+
+The Debian tests parse the `ar` and tar members directly and require `debian-binary`, `control.tar`,
+and `data.tar`. The data archive must contain the expected dylib and bundle-specific
+MobileSubstrate filter plist. When `dpkg-deb` is installed, the suite also requires it to accept
+the generated package metadata. arm64e and universal `.deb` export remain blocked until their
+package architecture metadata is explicitly defined.
