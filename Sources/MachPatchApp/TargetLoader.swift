@@ -33,6 +33,7 @@ struct TargetLoader: TargetLoading {
                     target: target,
                     inspection: inspection,
                     architectureReport: architectureReport,
+                    iconData: TargetIconLoader().loadIconData(for: target),
                     analysisState: initialAnalysisState(
                         target: target,
                         architectureReport: architectureReport

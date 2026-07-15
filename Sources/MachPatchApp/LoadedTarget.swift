@@ -7,6 +7,7 @@ struct LoadedTarget: Equatable, Sendable {
     let target: ResolvedTarget
     let inspection: MachOInspection
     let architectureReport: TargetArchitectureReport
+    let iconData: Data?
     let analysisState: TargetAnalysisState
 
     func replacingAnalysisState(_ state: TargetAnalysisState) -> LoadedTarget {
@@ -15,6 +16,7 @@ struct LoadedTarget: Equatable, Sendable {
             target: target,
             inspection: inspection,
             architectureReport: architectureReport,
+            iconData: iconData,
             analysisState: state
         )
     }
@@ -49,6 +51,28 @@ enum WorkspacePhase: Equatable, Sendable {
 struct WorkspaceFailure: Equatable, Sendable {
     let inputURL: URL
     let message: String
+}
+
+struct WorkspaceAlert: Identifiable, Equatable {
+    let id = UUID()
+    let title: String
+    let message: String
+
+    static func == (lhs: WorkspaceAlert, rhs: WorkspaceAlert) -> Bool {
+        lhs.title == rhs.title && lhs.message == rhs.message
+    }
+}
+
+struct PendingProjectImport: Identifiable, Equatable {
+    let id = UUID()
+    let project: PatchProject
+    let currentTargetIdentity: PatchTargetIdentity
+    let warnings: [PatchProjectValidationIssue]
+
+    static func == (lhs: PendingProjectImport, rhs: PendingProjectImport) -> Bool {
+        lhs.project == rhs.project && lhs.currentTargetIdentity == rhs.currentTargetIdentity
+            && lhs.warnings == rhs.warnings
+    }
 }
 
 enum WorkspaceNavigation: Hashable {

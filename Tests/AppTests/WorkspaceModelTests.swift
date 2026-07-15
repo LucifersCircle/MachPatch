@@ -64,7 +64,7 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertEqual(model.analysis, analysis)
     }
 
-    func testClassFiltersSearchMethodsAndSelection() async {
+    func testClassFiltersSearchMethodsAndSelection() async throws {
         let target = makeLoadedTarget()
         let analysis = makeAnalysis(for: target)
         let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
@@ -73,11 +73,25 @@ final class WorkspaceModelTests: XCTestCase {
         model.openTarget(at: loadedTarget.inputURL)
         await waitForLoadToFinish(model)
 
+        XCTAssertEqual(model.classFilter, .all)
+        XCTAssertEqual(model.filteredClasses.map(\.name), ["AppController", "SDKClass"])
+
+        model.classFilter = .likelyAppDefined
         XCTAssertEqual(model.filteredClasses.map(\.name), ["AppController"])
 
         model.classFilter = .all
         model.classSearch = "sdkMethod"
         XCTAssertEqual(model.filteredClasses.map(\.name), ["SDKClass"])
+        let methodMatchedClass = try XCTUnwrap(model.filteredClasses.first)
+        XCTAssertEqual(
+            model.methodSearchMatches(for: methodMatchedClass).map(\.selector),
+            ["sdkMethod"]
+        )
+
+        model.classSearch = "SDKClass"
+        XCTAssertEqual(model.filteredClasses.map(\.name), ["SDKClass"])
+        let classNameMatchedClass = try XCTUnwrap(model.filteredClasses.first)
+        XCTAssertTrue(model.methodSearchMatches(for: classNameMatchedClass).isEmpty)
 
         model.navigation = .objectiveCClass("class-sdk")
         XCTAssertEqual(model.selectedClass?.name, "SDKClass")
@@ -96,6 +110,196 @@ final class WorkspaceModelTests: XCTestCase {
         let wideLayout = ClassBrowserColumnLayout(availableWidth: 1_600)
         XCTAssertEqual(wideLayout.metadataWidth, 260)
         XCTAssertEqual(wideLayout.inspectorWidth, 340)
+    }
+
+    func testPatchDraftRecordsTargetSliceAndCreatesCanonicalPatch() throws {
+        let target = makeLoadedTarget()
+        let analysis = makeAnalysis(for: target)
+        let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
+        var draft = try XCTUnwrap(PatchProjectDraft(loadedTarget: loadedTarget))
+        let method = try XCTUnwrap(analysis.metadata.classes.first?.instanceMethods.first)
+        let patchID = try XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-000000000001"))
+
+        let patch = try draft.addPatch(
+            className: "AppController",
+            method: method,
+            id: patchID
+        )
+
+        XCTAssertEqual(draft.projectName, "Fixture Patch")
+        XCTAssertEqual(draft.outputName, "FixturePatch")
+        XCTAssertEqual(draft.target.executableSHA256, String(repeating: "a", count: 64))
+        XCTAssertEqual(
+            draft.target.selectedSlice, PatchSelectedSlice(architecture: .arm64, cpuSubtype: 0))
+        XCTAssertEqual(patch.id, patchID.uuidString)
+        XCTAssertEqual(patch.expectedTypeEncoding, "B16@0:8")
+        XCTAssertEqual(patch.action, .callOriginal)
+        XCTAssertTrue(draft.validationReport.isValid)
+    }
+
+    func testPatchActionPolicyIsTypeAwareAndExplainsUnsupportedSignatures() throws {
+        let booleanSignature = try ObjectiveCTypeEncodingDecoder.decodeMethodSignature("B16@0:8")
+
+        XCTAssertEqual(
+            PatchActionEditorPolicy.action(for: .returnBoolean, signature: booleanSignature),
+            .returnBoolean(false)
+        )
+        XCTAssertNil(
+            PatchActionEditorPolicy.action(for: .returnString, signature: booleanSignature))
+        XCTAssertEqual(
+            PatchActionEditorPolicy.unavailableReason(
+                for: .returnString,
+                signature: booleanSignature
+            ),
+            "Requires an Objective-C object return; this method returns boolean."
+        )
+
+        let unsupportedSignature = try ObjectiveCTypeEncodingDecoder.decodeMethodSignature(
+            "{Pair=ii}16@0:8"
+        )
+        XCTAssertEqual(
+            PatchActionEditorPolicy.unavailableReason(
+                for: .callOriginal,
+                signature: unsupportedSignature
+            ),
+            "The complete method signature contains an unsupported ABI type."
+        )
+    }
+
+    func testPatchDraftRejectsMethodWithoutTypeEncoding() throws {
+        let target = makeLoadedTarget()
+        let loadedTarget = target.replacingAnalysisState(.loaded(makeAnalysis(for: target)))
+        var draft = try XCTUnwrap(PatchProjectDraft(loadedTarget: loadedTarget))
+        let method = ObjectiveCMethod(
+            id: "missing-encoding",
+            selector: "unknown",
+            kind: .instance,
+            typeEncoding: nil,
+            implementationAddress: nil
+        )
+
+        XCTAssertThrowsError(try draft.addPatch(className: "AppController", method: method)) {
+            XCTAssertEqual($0 as? PatchDraftError, .typeEncodingUnavailable)
+        }
+    }
+
+    func testSelectingAnalyzedSliceDoesNotDiscardPatchDraft() async throws {
+        let target = makeLoadedTarget()
+        let analysis = makeAnalysis(for: target)
+        let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
+        let model = WorkspaceModel(loader: SuccessfulLoader(target: loadedTarget))
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+        let method = try XCTUnwrap(analysis.metadata.classes.first?.instanceMethods.first)
+        try model.addPatch(className: "AppController", method: method)
+
+        model.selectArchitecture(sliceIndex: 0)
+
+        XCTAssertEqual(model.projectDraft?.patches.count, 1)
+        XCTAssertEqual(model.projectDraft?.patches.first?.selector, "featureEnabled")
+    }
+
+    func testProjectSaveAndOpenRoundTripAgainstCachedAnalysis() async throws {
+        let target = makeLoadedTarget()
+        let analysis = makeAnalysis(for: target)
+        let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
+        let model = WorkspaceModel(loader: SuccessfulLoader(target: loadedTarget))
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+        let method = try XCTUnwrap(analysis.metadata.classes.first?.instanceMethods.first)
+        try model.addPatch(className: "AppController", method: method)
+        let savedProject = try XCTUnwrap(model.patchProject)
+        let projectURL = temporaryProjectURL()
+        defer { try? FileManager.default.removeItem(at: projectURL) }
+        try PatchProjectCodec.encode(savedProject).write(to: projectURL)
+
+        model.removePatch(id: try XCTUnwrap(savedProject.patches.first?.id))
+        model.saveProject()
+        XCTAssertTrue(model.isProjectExporterPresented)
+        model.isProjectExporterPresented = false
+
+        model.openProject(at: projectURL)
+        await waitForProjectImport(model)
+
+        XCTAssertEqual(model.patchProject, savedProject)
+        XCTAssertEqual(model.selectedClass?.name, "AppController")
+    }
+
+    func testChangedTargetProjectRequiresExplicitRetargetDecision() async throws {
+        let target = makeLoadedTarget()
+        let analysis = makeAnalysis(for: target)
+        let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
+        let model = WorkspaceModel(loader: SuccessfulLoader(target: loadedTarget))
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+        let currentProject = try XCTUnwrap(model.patchProject)
+        let changedProject = PatchProject(
+            projectName: currentProject.projectName,
+            target: PatchTargetIdentity(
+                bundleIdentifier: currentProject.target.bundleIdentifier,
+                executableName: currentProject.target.executableName,
+                executableSHA256: String(repeating: "b", count: 64),
+                selectedSlice: currentProject.target.selectedSlice,
+                minimumIOSVersion: currentProject.target.minimumIOSVersion
+            ),
+            build: currentProject.build,
+            patches: currentProject.patches
+        )
+        let projectURL = temporaryProjectURL()
+        defer { try? FileManager.default.removeItem(at: projectURL) }
+        try PatchProjectCodec.encode(changedProject).write(to: projectURL)
+
+        model.openProject(at: projectURL)
+        await waitForProjectImport(model)
+
+        XCTAssertEqual(model.pendingProjectImport?.project, changedProject)
+        XCTAssertEqual(model.pendingProjectImport?.warnings.map(\.code), [.targetHashMismatch])
+
+        model.resolvePendingProjectImport(retarget: true)
+
+        XCTAssertEqual(
+            model.patchProject?.target.executableSHA256, String(repeating: "a", count: 64))
+        XCTAssertNil(model.pendingProjectImport)
+    }
+
+    func testTargetIconLoaderUsesTheDeclaredBundleIcon() throws {
+        let bundleURL = FileManager.default.temporaryDirectory
+            .appending(path: "MachPatchIcon-\(UUID().uuidString).app", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: bundleURL) }
+        try FileManager.default.createDirectory(at: bundleURL, withIntermediateDirectories: true)
+        let info: [String: Any] = [
+            "CFBundleIcons": [
+                "CFBundlePrimaryIcon": [
+                    "CFBundleIconFiles": ["PrimaryIcon"]
+                ]
+            ]
+        ]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .binary, options: 0)
+            .write(to: bundleURL.appending(path: "Info.plist"))
+        let iconData = try XCTUnwrap(
+            Data(
+                base64Encoded:
+                    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            )
+        )
+        try iconData.write(to: bundleURL.appending(path: "PrimaryIcon@2x.png"))
+        try Data(repeating: 0xFF, count: 512).write(
+            to: bundleURL.appending(path: "UnrelatedIcon.png")
+        )
+        let target = ResolvedTarget(
+            sourceType: .applicationBundle,
+            sourcePath: bundleURL.path,
+            bundlePath: bundleURL.path,
+            bundleIdentifier: "com.example.icon",
+            displayName: "Icon Fixture",
+            minimumOSVersion: "15.0",
+            supportedPlatforms: ["iPhoneOS"],
+            executableName: "IconFixture",
+            executablePath: bundleURL.appending(path: "IconFixture").path,
+            sha256: String(repeating: "a", count: 64)
+        )
+
+        XCTAssertEqual(TargetIconLoader().loadIconData(for: target), iconData)
     }
 
     private func waitForLoadToFinish(_ model: WorkspaceModel) async {
@@ -120,6 +324,23 @@ final class WorkspaceModelTests: XCTestCase {
             }
         }
         XCTFail("Objective-C analysis did not finish")
+    }
+
+    private func waitForProjectImport(_ model: WorkspaceModel) async {
+        for _ in 0..<1_000 {
+            if model.pendingProjectImport != nil || model.workspaceAlert != nil
+                || model.patchProject?.patches.isEmpty == false
+            {
+                return
+            }
+            await Task.yield()
+        }
+        XCTFail("Patch project import did not finish")
+    }
+
+    private func temporaryProjectURL() -> URL {
+        FileManager.default.temporaryDirectory
+            .appending(path: "MachPatch-\(UUID().uuidString).json")
     }
 
     private func makeLoadedTarget() -> LoadedTarget {
@@ -166,6 +387,7 @@ final class WorkspaceModelTests: XCTestCase {
             target: resolvedTarget,
             inspection: inspection,
             architectureReport: ArchitectureResolver.report(for: inspection.slices),
+            iconData: nil,
             analysisState: .requiresSliceSelection
         )
     }

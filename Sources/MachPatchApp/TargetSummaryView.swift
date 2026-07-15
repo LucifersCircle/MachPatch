@@ -21,11 +21,7 @@ struct TargetSummaryView: View {
 
     private var header: some View {
         HStack(spacing: 16) {
-            Image(systemName: "app.dashed")
-                .font(.system(size: 38, weight: .medium))
-                .foregroundStyle(.tint)
-                .frame(width: 62, height: 62)
-                .background(.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+            TargetIconView(iconData: loadedTarget.iconData, size: 62)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(displayName)

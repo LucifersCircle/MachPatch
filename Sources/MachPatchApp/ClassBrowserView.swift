@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ClassBrowserView: View {
     let objectiveCClass: ObjectiveCClass
+    @ObservedObject var model: WorkspaceModel
 
     @State private var methodSearch = ""
     @State private var selectedMethodID: String?
@@ -87,7 +88,11 @@ struct ClassBrowserView: View {
     @ViewBuilder
     private var methodInspector: some View {
         if let method = selectedMethod {
-            MethodInspectorView(method: method)
+            MethodInspectorView(
+                objectiveCClass: objectiveCClass,
+                method: method,
+                model: model
+            )
         } else {
             ContentUnavailableView(
                 "Select a Method",
@@ -102,8 +107,14 @@ struct ClassBrowserView: View {
         if !methods.isEmpty {
             Section("\(title) · \(methods.count)") {
                 ForEach(methods) { method in
-                    MethodListRow(method: method)
-                        .tag(method.id)
+                    MethodListRow(
+                        method: method,
+                        isPatched: model.patch(
+                            className: objectiveCClass.name,
+                            method: method
+                        ) != nil
+                    )
+                    .tag(method.id)
                 }
             }
         }
@@ -251,6 +262,7 @@ private struct ClassMetadataPanel: View {
 
 private struct MethodListRow: View {
     let method: ObjectiveCMethod
+    let isPatched: Bool
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -265,12 +277,20 @@ private struct MethodListRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
+            Spacer(minLength: 4)
+            if isPatched {
+                Image(systemName: "hammer.circle.fill")
+                    .foregroundStyle(.tint)
+                    .help("This method has a patch draft")
+            }
         }
     }
 }
 
 private struct MethodInspectorView: View {
+    let objectiveCClass: ObjectiveCClass
     let method: ObjectiveCMethod
+    @ObservedObject var model: WorkspaceModel
 
     var body: some View {
         ScrollView {
@@ -306,17 +326,13 @@ private struct MethodInspectorView: View {
                         }
                     }
 
-                    inspectorSection("Compatible Actions") {
-                        let actions = PatchActionCompatibility.allowedActions(for: signature)
-                        if actions.isEmpty {
-                            Text("No version 1 action supports this complete ABI signature.")
-                                .foregroundStyle(.secondary)
-                        } else {
-                            ForEach(actions, id: \.rawValue) { action in
-                                Label(action.rawValue, systemImage: "checkmark.circle")
-                                    .foregroundStyle(.green)
-                            }
-                        }
+                    inspectorSection("Patch Editor") {
+                        PatchEditorView(
+                            objectiveCClass: objectiveCClass,
+                            method: method,
+                            signature: signature,
+                            model: model
+                        )
                     }
                 } else if method.typeEncoding != nil {
                     inspectorSection("Decoded Signature") {
@@ -361,6 +377,330 @@ private struct MethodInspectorView: View {
             Text(title)
                 .font(.headline)
             content()
+        }
+    }
+}
+
+private struct PatchEditorView: View {
+    let objectiveCClass: ObjectiveCClass
+    let method: ObjectiveCMethod
+    let signature: ObjectiveCMethodSignature
+    @ObservedObject var model: WorkspaceModel
+
+    @State private var editorError: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let patch = model.patch(className: objectiveCClass.name, method: method) {
+                editor(for: patch)
+            } else {
+                Button {
+                    do {
+                        try model.addPatch(className: objectiveCClass.name, method: method)
+                        editorError = nil
+                    } catch {
+                        editorError = error.localizedDescription
+                    }
+                } label: {
+                    Label("Create Patch", systemImage: "hammer")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(allowedActions.isEmpty)
+
+                Text(
+                    allowedActions.isEmpty
+                        ? "This complete method signature is not patchable in version 1."
+                        : "MachPatch will create a type-safe patch that records this exact method encoding."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            if let editorError {
+                Label(editorError, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            if !allowedActions.isEmpty {
+                DisclosureGroup("Available Actions") {
+                    VStack(alignment: .leading, spacing: 7) {
+                        ForEach(allowedActions, id: \.rawValue) { kind in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Label(kind.displayName, systemImage: "checkmark.circle")
+                                    .foregroundStyle(.green)
+                                Text(kind.summary)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                    .padding(.top, 6)
+                }
+                .font(.caption)
+            }
+
+            if !unavailableActions.isEmpty {
+                DisclosureGroup("Unavailable Actions") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(unavailableActions, id: \.rawValue) { kind in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Label(kind.displayName, systemImage: "nosign")
+                                    .foregroundStyle(.secondary)
+                                Text(
+                                    PatchActionEditorPolicy.unavailableReason(
+                                        for: kind,
+                                        signature: signature
+                                    ) ?? "Unavailable for this method."
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                    .padding(.top, 6)
+                }
+                .font(.caption)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func editor(for patch: MethodPatch) -> some View {
+        if !patch.enabled {
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Disabled Imported Patch", systemImage: "pause.circle")
+                    .foregroundStyle(.orange)
+                Text("Disabled patches are preserved in imported projects but omitted from builds.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Enable Patch") {
+                    model.updatePatch(patch.replacing(enabled: true))
+                }
+            }
+        }
+
+        Picker(
+            "Action",
+            selection: Binding(
+                get: { patch.action.kind.rawValue },
+                set: { rawValue in
+                    guard let kind = PatchActionKind(rawValue: rawValue),
+                        let action = PatchActionEditorPolicy.action(
+                            for: kind,
+                            signature: signature
+                        )
+                    else { return }
+                    model.updatePatch(patch.replacing(action: action))
+                }
+            )
+        ) {
+            ForEach(allowedActions, id: \.rawValue) { kind in
+                Text(kind.displayName)
+                    .tag(kind.rawValue)
+            }
+        }
+
+        actionValueEditor(for: patch)
+
+        if let incompatibility = PatchActionCompatibility.incompatibility(
+            action: patch.action,
+            signature: signature
+        ) {
+            Label(incompatibility, systemImage: "exclamationmark.triangle")
+                .font(.caption)
+                .foregroundStyle(.red)
+        } else {
+            Label(
+                "Compatible with \(signature.returnType.kind.rawValue)",
+                systemImage: "checkmark.circle"
+            )
+            .font(.caption)
+            .foregroundStyle(.green)
+        }
+
+        Text("Patch ID \(patch.id)")
+            .font(.caption2.monospaced())
+            .foregroundStyle(.tertiary)
+            .textSelection(.enabled)
+
+        Button("Remove Patch", role: .destructive) {
+            model.removePatch(id: patch.id)
+        }
+    }
+
+    @ViewBuilder
+    private func actionValueEditor(for patch: MethodPatch) -> some View {
+        switch patch.action {
+        case .returnBoolean(let value):
+            booleanPicker(
+                "Boolean Result",
+                value: actionBinding(patch: patch, value: value) { .returnBoolean($0) }
+            )
+            actionExplanation(
+                "The original method is not called. This patch always returns \(value ? "True" : "False")."
+            )
+        case .returnSignedInteger(let value):
+            TextField(
+                "Signed Return Value",
+                value: actionBinding(patch: patch, value: value) { .returnSignedInteger($0) },
+                format: .number.grouping(.never)
+            )
+            actionExplanation(
+                "The original method is not called; this integer is returned instead.")
+        case .returnUnsignedInteger(let value):
+            TextField(
+                "Unsigned Return Value",
+                value: actionBinding(patch: patch, value: value) { .returnUnsignedInteger($0) },
+                format: .number.grouping(.never)
+            )
+            actionExplanation(
+                "The original method is not called; this integer is returned instead.")
+        case .returnString(let value):
+            TextField(
+                "String Result",
+                text: actionBinding(patch: patch, value: value) { .returnString($0) }
+            )
+            actionExplanation(
+                "The original method is not called; this Objective-C string is returned.")
+        case .callOriginalAndReplace(let replacement):
+            replacementEditor(for: replacement, patch: patch)
+            actionExplanation(
+                "The original method runs first. Its result is discarded and replaced with the value above."
+            )
+        case .returnNil:
+            actionExplanation("The original method is not called. This patch always returns nil.")
+        case .logInvocation:
+            actionExplanation(
+                "Writes a [MachPatch] NSLog entry containing the class and selector, then calls the original method unchanged. Read it through a LiveContainer console when available, or the device log in macOS Console."
+            )
+        case .logArguments:
+            actionExplanation(
+                "Writes [MachPatch] NSLog entries for the invocation and each supported argument, then calls the original method unchanged. Read them through a LiveContainer console when available, or the device log in macOS Console."
+            )
+        case .logOriginalReturnValue:
+            actionExplanation(
+                "Calls the original method, writes its result to NSLog with a [MachPatch] prefix, and returns that same result unchanged."
+            )
+        case .callOriginal:
+            actionExplanation(
+                "Calls the original method without logging or changing its behavior. This is useful as a safe baseline patch."
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func replacementEditor(for replacement: PatchReturnValue, patch: MethodPatch)
+        -> some View
+    {
+        switch replacement {
+        case .boolean(let value):
+            booleanPicker(
+                "Replacement Result",
+                value: replacementBinding(patch: patch, value: value) { .boolean($0) }
+            )
+        case .signedInteger(let value):
+            TextField(
+                "Replacement Value",
+                value: replacementBinding(patch: patch, value: value) { .signedInteger($0) },
+                format: .number.grouping(.never)
+            )
+        case .unsignedInteger(let value):
+            TextField(
+                "Replacement Value",
+                value: replacementBinding(patch: patch, value: value) { .unsignedInteger($0) },
+                format: .number.grouping(.never)
+            )
+        case .string(let value):
+            TextField(
+                "Replacement String",
+                text: replacementBinding(patch: patch, value: value) { .string($0) }
+            )
+        case .nilValue:
+            Text("The original implementation is called, then its result is replaced with nil.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func booleanPicker(_ title: String, value: Binding<Bool>) -> some View {
+        Picker(title, selection: value) {
+            Text("False").tag(false)
+            Text("True").tag(true)
+        }
+        .pickerStyle(.segmented)
+    }
+
+    private func actionExplanation(_ text: String) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func actionBinding<Value>(
+        patch: MethodPatch,
+        value: Value,
+        makeAction: @escaping (Value) -> PatchAction
+    ) -> Binding<Value> {
+        Binding(
+            get: { value },
+            set: { model.updatePatch(patch.replacing(action: makeAction($0))) }
+        )
+    }
+
+    private func replacementBinding<Value>(
+        patch: MethodPatch,
+        value: Value,
+        makeReplacement: @escaping (Value) -> PatchReturnValue
+    ) -> Binding<Value> {
+        Binding(
+            get: { value },
+            set: {
+                model.updatePatch(
+                    patch.replacing(action: .callOriginalAndReplace(makeReplacement($0)))
+                )
+            }
+        )
+    }
+
+    private var allowedActions: [PatchActionKind] {
+        PatchActionCompatibility.allowedActions(for: signature)
+    }
+
+    private var unavailableActions: [PatchActionKind] {
+        PatchActionKind.allCases.filter { !allowedActions.contains($0) }
+    }
+}
+
+private extension PatchActionKind {
+    var displayName: String {
+        switch self {
+        case .returnBoolean: "Return Boolean"
+        case .returnSignedInteger: "Return Signed Integer"
+        case .returnUnsignedInteger: "Return Unsigned Integer"
+        case .returnNil: "Return Nil"
+        case .returnString: "Return String"
+        case .logInvocation: "Log Invocation"
+        case .logArguments: "Log Arguments"
+        case .logOriginalReturnValue: "Log Original Return Value"
+        case .callOriginal: "Call Original"
+        case .callOriginalAndReplace: "Call Original and Replace Result"
+        }
+    }
+
+    var summary: String {
+        switch self {
+        case .returnBoolean: "Replace the method with a constant True or False result."
+        case .returnSignedInteger: "Return a constant signed integer without calling the original."
+        case .returnUnsignedInteger:
+            "Return a constant unsigned integer without calling the original."
+        case .returnNil: "Return nil without calling the original."
+        case .returnString: "Return a constant Objective-C string without calling the original."
+        case .logInvocation: "Log the class and selector, then call the original unchanged."
+        case .logArguments: "Log supported arguments, then call the original unchanged."
+        case .logOriginalReturnValue: "Call the original, log its result, and return it unchanged."
+        case .callOriginal: "Call the original without logging or changing its result."
+        case .callOriginalAndReplace: "Call the original, then discard and replace its result."
         }
     }
 }

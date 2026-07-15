@@ -1,3 +1,4 @@
+import AppKit
 import MachPatchCore
 import SwiftUI
 
@@ -26,7 +27,7 @@ struct TargetSidebar: View {
                                 .foregroundStyle(.secondary)
                         }
                     } icon: {
-                        Image(systemName: "app.dashed")
+                        TargetIconView(iconData: loadedTarget.iconData, size: 24)
                     }
                     .tag(WorkspaceNavigation.target)
                 }
@@ -99,11 +100,18 @@ struct TargetSidebar: View {
                 "Classes · \(model.filteredClasses.count) of \(analysis.metadata.classes.count)"
             ) {
                 ForEach(model.filteredClasses) { objectiveCClass in
+                    let methodMatches = model.methodSearchMatches(for: objectiveCClass)
                     Label {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(objectiveCClass.name)
                                 .lineLimit(1)
-                            if let superclass = objectiveCClass.superclassName {
+                            if let firstMatch = methodMatches.first {
+                                Text(methodMatchSummary(firstMatch, total: methodMatches.count))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .help(methodMatchHelp(methodMatches))
+                            } else if let superclass = objectiveCClass.superclassName {
                                 Text(superclass)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
@@ -112,10 +120,7 @@ struct TargetSidebar: View {
                         }
                     } icon: {
                         Image(systemName: classIcon(objectiveCClass))
-                            .foregroundStyle(
-                                objectiveCClass.isLikelyAppDefined
-                                    ? Color.accentColor : Color.secondary
-                            )
+                            .foregroundStyle(classIconColor(objectiveCClass))
                     }
                     .tag(WorkspaceNavigation.objectiveCClass(objectiveCClass.id))
                 }
@@ -164,5 +169,29 @@ struct TargetSidebar: View {
         } else {
             "cube"
         }
+    }
+
+    private func classIconColor(_ objectiveCClass: ObjectiveCClass) -> Color {
+        if model.navigation == .objectiveCClass(objectiveCClass.id) {
+            return Color(nsColor: .alternateSelectedControlTextColor)
+        }
+        if objectiveCClass.isObjectiveCVisibleSwift {
+            return .orange
+        }
+        return objectiveCClass.isLikelyAppDefined ? .accentColor : .secondary
+    }
+
+    private func methodMatchSummary(_ method: ObjectiveCMethod, total: Int) -> String {
+        let marker = method.kind == .instance ? "−" : "+"
+        let remainder = total > 1 ? " + \(total - 1) more" : ""
+        return "Method: \(marker)\(method.selector)\(remainder)"
+    }
+
+    private func methodMatchHelp(_ methods: [ObjectiveCMethod]) -> String {
+        "Matched methods:\n"
+            + methods.map {
+                let marker = $0.kind == .instance ? "−" : "+"
+                return "\(marker)\($0.selector)"
+            }.joined(separator: "\n")
     }
 }

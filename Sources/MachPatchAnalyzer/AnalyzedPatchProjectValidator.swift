@@ -30,19 +30,26 @@ public enum AnalyzedPatchProjectValidator {
         _ project: PatchProject,
         against analysis: ObjectiveCAnalysis
     ) throws -> PatchProjectValidationReport {
-        let base = PatchProjectValidator.validate(project)
         let slices = try MachOInspector().inspect(at: analysis.target.executableURL)
         guard slices.indices.contains(analysis.sliceIndex) else {
             throw ObjectiveCAnalyzerError.sliceIndexOutOfRange(analysis.sliceIndex)
         }
-        let slice = slices[analysis.sliceIndex]
+        return validate(project, against: analysis, selectedSlice: slices[analysis.sliceIndex])
+    }
+
+    public static func validate(
+        _ project: PatchProject,
+        against analysis: ObjectiveCAnalysis,
+        selectedSlice: MachOSlice
+    ) -> PatchProjectValidationReport {
+        let base = PatchProjectValidator.validate(project)
         var errors = base.errors
         var warnings = base.warnings
 
         appendTargetIdentityIssues(
             project: project,
             analysis: analysis,
-            slice: slice,
+            slice: selectedSlice,
             errors: &errors,
             warnings: &warnings
         )

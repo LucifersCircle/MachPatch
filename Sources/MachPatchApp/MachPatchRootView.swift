@@ -15,6 +15,23 @@ struct MachPatchRootView: View {
         .frame(minWidth: 900, minHeight: 620)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Button {
+                        model.chooseProject()
+                    } label: {
+                        Label("Open Patch Project…", systemImage: "doc")
+                    }
+                    Button {
+                        model.saveProject()
+                    } label: {
+                        Label("Save Patch Project…", systemImage: "square.and.arrow.down")
+                    }
+                    .disabled(model.projectDraft == nil)
+                } label: {
+                    Label("Patch Project", systemImage: "hammer")
+                }
+            }
+            ToolbarItem(placement: .primaryAction) {
                 Button {
                     model.chooseTarget()
                 } label: {
@@ -32,6 +49,22 @@ struct MachPatchRootView: View {
                 model.openTarget(at: inputURL)
             }
         }
+        .fileImporter(
+            isPresented: $model.isProjectImporterPresented,
+            allowedContentTypes: [.json],
+            allowsMultipleSelection: false
+        ) { result in
+            if case .success(let urls) = result, let projectURL = urls.first {
+                model.openProject(at: projectURL)
+            }
+        }
+        .fileExporter(
+            isPresented: $model.isProjectExporterPresented,
+            document: model.projectDocument,
+            contentType: .json,
+            defaultFilename: model.defaultProjectFilename,
+            onCompletion: model.handleProjectExport
+        )
         .dropDestination(for: URL.self) { urls, _ in
             guard let inputURL = urls.first else { return false }
             model.openTarget(at: inputURL)
@@ -44,6 +77,33 @@ struct MachPatchRootView: View {
                 DropTargetOverlay()
                     .allowsHitTesting(false)
             }
+        }
+        .alert(item: $model.workspaceAlert) { alert in
+            Alert(
+                title: Text(alert.title),
+                message: Text(alert.message),
+                dismissButton: .default(Text("OK"))
+            )
+        }
+        .confirmationDialog(
+            "The Target Has Changed",
+            isPresented: Binding(
+                get: { model.pendingProjectImport != nil },
+                set: { if !$0 { model.cancelPendingProjectImport() } }
+            ),
+            presenting: model.pendingProjectImport
+        ) { _ in
+            Button("Continue Without Updating Identity") {
+                model.resolvePendingProjectImport(retarget: false)
+            }
+            Button("Retarget Project to This Executable") {
+                model.resolvePendingProjectImport(retarget: true)
+            }
+            Button("Cancel", role: .cancel) {
+                model.cancelPendingProjectImport()
+            }
+        } message: { pending in
+            Text(pending.warnings.map(\.message).joined(separator: "\n"))
         }
     }
 }
@@ -60,7 +120,7 @@ private struct WorkspaceDetail: View {
                 LoadingTargetView(inputURL: inputURL)
             case .loaded(let loadedTarget):
                 if let objectiveCClass = model.selectedClass {
-                    ClassBrowserView(objectiveCClass: objectiveCClass)
+                    ClassBrowserView(objectiveCClass: objectiveCClass, model: model)
                         .id(objectiveCClass.id)
                 } else {
                     TargetSummaryView(loadedTarget: loadedTarget)
