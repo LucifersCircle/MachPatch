@@ -196,6 +196,12 @@ arguments, conditions, logging, and original-result replacement. `Class` and `SE
 return validated runtime names or explicit `Nil`/`NULL`. Every option is validated against the
 decoded method signature before source generation or building.
 
+Opaque pointer and block arguments can now pass through to the original implementation, log only
+their addresses, or be explicitly replaced/compared with `NULL`/`nil`; presets never dereference
+pointers or invoke blocks. Exact 64-bit `CGPoint`, `CGSize`, `CGRect`, and `NSRange` layouts use
+typed pass-through and field logging. Pointer/block returns and arbitrary structures remain
+unavailable.
+
 ## Build a device dylib
 
 Inspect a target's device slices, then build with the active Xcode iPhoneOS toolchain:

@@ -249,9 +249,112 @@ final class PatchProjectTests: XCTestCase {
         let structure = validate(action: .callOriginal, encoding: "{Point=dd}@:")
         XCTAssertTrue(structure.errors.contains { $0.code == .unsupportedReturnType })
 
-        let block = validate(action: .logInvocation, encoding: "v24@0:8@?16", selector: "run:")
-        XCTAssertTrue(block.errors.contains { $0.code == .unsupportedArgumentType })
-        XCTAssertTrue(block.errors.contains { $0.code == .incompatibleAction })
+        XCTAssertTrue(
+            validate(action: .logInvocation, encoding: "v24@0:8@?16", selector: "run:")
+                .isValid
+        )
+        let skippedBlock = validate(
+            action: .returnBoolean(true),
+            encoding: "B24@0:8@?16",
+            selector: "run:"
+        )
+        XCTAssertFalse(skippedBlock.errors.contains { $0.code == .unsupportedArgumentType })
+        XCTAssertTrue(skippedBlock.errors.contains { $0.code == .incompatibleAction })
+
+        XCTAssertTrue(
+            validate(action: .callOriginal, encoding: "@?16@0:8").errors.contains {
+                $0.code == .unsupportedReturnType
+            }
+        )
+        XCTAssertTrue(
+            validate(action: .callOriginal, encoding: "^v16@0:8").errors.contains {
+                $0.code == .unsupportedReturnType
+            }
+        )
+    }
+
+    func testOpaqueArgumentsAllowPassThroughLoggingAndExplicitNullOnly() {
+        let validPatch = makePatch(
+            selector: "runWithPointer:block:",
+            encoding: "B32@0:8^v16@?24",
+            action: .callOriginalAndReplace(.boolean(false)),
+            advanced: PatchAdvancedConfiguration(
+                argumentReplacements: [
+                    PatchArgumentReplacement(argumentIndex: 0, value: .nilValue),
+                    PatchArgumentReplacement(argumentIndex: 1, value: .nilValue),
+                ],
+                conditionalReturn: PatchConditionalReturn(
+                    condition: PatchCondition(
+                        source: .argument(0),
+                        comparison: .equal,
+                        value: .nilValue
+                    ),
+                    replacement: .boolean(true)
+                )
+            )
+        )
+        XCTAssertTrue(PatchProjectValidator.validate(makeProject(patches: [validPatch])).isValid)
+
+        let invalidPatch = makePatch(
+            selector: "runWithPointer:",
+            encoding: "v24@0:8^v16",
+            action: .callOriginal,
+            advanced: PatchAdvancedConfiguration(
+                argumentReplacements: [
+                    PatchArgumentReplacement(argumentIndex: 0, value: .string("unsafe"))
+                ]
+            )
+        )
+        XCTAssertTrue(
+            PatchProjectValidator.validate(makeProject(patches: [invalidPatch])).errors.contains {
+                $0.code == .incompatibleArgumentReplacement
+            }
+        )
+    }
+
+    func testKnownStructuresUseExactPassThroughTiers() {
+        for encoding in [
+            "{CGPoint=dd}16@0:8",
+            "{CGSize=dd}16@0:8",
+            "{CGRect={CGPoint=dd}{CGSize=dd}}16@0:8",
+            "{_NSRange=QQ}16@0:8",
+        ] {
+            XCTAssertTrue(validate(action: .callOriginal, encoding: encoding).isValid, encoding)
+            XCTAssertTrue(
+                validate(action: .logOriginalReturnValue, encoding: encoding).isValid,
+                encoding
+            )
+        }
+
+        XCTAssertTrue(
+            validate(
+                action: .logArguments,
+                encoding: "v48@0:8{CGRect={CGPoint=dd}{CGSize=dd}}16",
+                selector: "useRect:"
+            ).isValid
+        )
+        XCTAssertTrue(
+            validate(
+                action: .returnNil,
+                encoding: "{CGRect={CGPoint=dd}{CGSize=dd}}16@0:8"
+            ).errors.contains { $0.code == .incompatibleAction }
+        )
+
+        let replacement = makePatch(
+            selector: "usePoint:",
+            encoding: "v32@0:8{CGPoint=dd}16",
+            action: .callOriginal,
+            advanced: PatchAdvancedConfiguration(
+                argumentReplacements: [
+                    PatchArgumentReplacement(argumentIndex: 0, value: .nilValue)
+                ]
+            )
+        )
+        XCTAssertTrue(
+            PatchProjectValidator.validate(makeProject(patches: [replacement])).errors.contains {
+                $0.code == .incompatibleArgumentReplacement
+            }
+        )
     }
 
     func testLegacyCharIsAnIntegerUnlessBooleanIsExplicitlySupportedLater() {

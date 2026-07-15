@@ -365,7 +365,7 @@ public enum ObjectiveCPatchabilityAnalyzer {
             )
         }
 
-        if !PatchActionCompatibility.isSupportedReturnType(signature.returnType.kind) {
+        if !PatchActionCompatibility.isSupportedReturnType(signature.returnType) {
             issues.append(
                 ObjectiveCMethodPatchabilityIssue(
                     code: .unsupportedReturnType,
@@ -378,7 +378,7 @@ public enum ObjectiveCPatchabilityAnalyzer {
         }
 
         for (index, argument) in signature.explicitArguments.enumerated()
-        where !PatchActionCompatibility.isSupportedArgumentType(argument.kind) {
+        where !PatchActionCompatibility.isSupportedArgumentType(argument) {
             issues.append(
                 ObjectiveCMethodPatchabilityIssue(
                     code: .unsupportedArgumentType,

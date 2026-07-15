@@ -100,6 +100,12 @@ private struct PatchGenerationContext {
         }
     }
 
+    var needsCoreGraphics: Bool {
+        ([signature.returnType] + signature.explicitArguments).contains {
+            $0.knownStructure?.requiresCoreGraphics == true
+        }
+    }
+
     var objcDescription: String {
         let marker = patch.methodKind == .instance ? "-" : "+"
         return "\(marker)[\(patch.className) \(patch.selector)]"
@@ -132,7 +138,13 @@ private struct GeneratedArgument {
 
 private enum ObjectiveCTypeMapper {
     static func cType(for type: ObjectiveCType) throws -> String {
-        switch type.kind {
+        if type.kind == .structure {
+            guard let structure = type.knownStructure else {
+                throw ObjectiveCSourceGeneratorError.unsupportedType(type.kind)
+            }
+            return structure.rawValue
+        }
+        return switch type.kind {
         case .void: "void"
         case .boolean: "BOOL"
         case .signedChar: "signed char"
@@ -148,8 +160,10 @@ private enum ObjectiveCTypeMapper {
         case .float: "float"
         case .double: "double"
         case .object: "id"
+        case .block: "id"
         case .classObject: "Class"
         case .selector: "SEL"
+        case .pointer: "void *"
         default: throw ObjectiveCSourceGeneratorError.unsupportedType(type.kind)
         }
     }
@@ -188,6 +202,9 @@ private struct SourceRenderer {
             """
         if contexts.contains(where: \.needsUIKit) {
             imports += "\n#import <UIKit/UIKit.h>"
+        }
+        if contexts.contains(where: \.needsCoreGraphics) {
+            imports += "\n#import <CoreGraphics/CoreGraphics.h>"
         }
         return imports + """
 
@@ -443,6 +460,19 @@ private struct SourceRenderer {
         case .selector:
             return
                 "NSLog(@\"[MachPatch] %@ argument \(index + 1) = %@\", \(description), NSStringFromSelector(\(argument.name)));"
+        case .block:
+            return
+                "NSLog(@\"[MachPatch] %@ argument \(index + 1) block address = %p\", \(description), (__bridge void *)\(argument.name));"
+        case .pointer:
+            return
+                "NSLog(@\"[MachPatch] %@ argument \(index + 1) pointer = %p\", \(description), (void *)\(argument.name));"
+        case .structure:
+            return logStructure(
+                argument.type,
+                expression: argument.name,
+                prefix: "[MachPatch] %@ argument \(index + 1)",
+                description: description
+            )
         default:
             preconditionFailure("Unsupported argument reached source generation")
         }
@@ -479,11 +509,44 @@ private struct SourceRenderer {
             lines.append(
                 "NSLog(@\"[MachPatch] %@ returned %@\", \(description), \(result) == NULL ? @\"(null)\" : NSStringFromSelector(\(result)));"
             )
+        case .structure:
+            lines.append(
+                logStructure(
+                    context.signature.returnType,
+                    expression: result,
+                    prefix: "[MachPatch] %@ returned",
+                    description: description
+                )
+            )
         default:
             preconditionFailure("Unsupported return reached source generation")
         }
         return lines + renderEffects(context.advanced.afterEffects, phase: "after-original")
             + ["return \(result);"]
+    }
+
+    private func logStructure(
+        _ type: ObjectiveCType,
+        expression: String,
+        prefix: String,
+        description: String
+    ) -> String {
+        switch type.knownStructure {
+        case .cgPoint:
+            return
+                "NSLog(@\"\(prefix) CGPoint { x = %.17g, y = %.17g }\", \(description), (double)\(expression).x, (double)\(expression).y);"
+        case .cgSize:
+            return
+                "NSLog(@\"\(prefix) CGSize { width = %.17g, height = %.17g }\", \(description), (double)\(expression).width, (double)\(expression).height);"
+        case .cgRect:
+            return
+                "NSLog(@\"\(prefix) CGRect { x = %.17g, y = %.17g, width = %.17g, height = %.17g }\", \(description), (double)\(expression).origin.x, (double)\(expression).origin.y, (double)\(expression).size.width, (double)\(expression).size.height);"
+        case .nsRange:
+            return
+                "NSLog(@\"\(prefix) NSRange { location = %llu, length = %llu }\", \(description), (unsigned long long)\(expression).location, (unsigned long long)\(expression).length);"
+        case nil:
+            preconditionFailure("Unsupported structure reached source generation")
+        }
     }
 
     private func argumentReplacementLines(_ context: PatchGenerationContext) -> [String] {
@@ -653,7 +716,7 @@ private struct SourceRenderer {
     private func nullLiteral(for kind: ObjectiveCTypeKind) -> String {
         switch kind {
         case .classObject: "Nil"
-        case .selector: "NULL"
+        case .selector, .pointer: "NULL"
         default: "nil"
         }
     }

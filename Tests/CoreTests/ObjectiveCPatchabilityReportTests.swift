@@ -120,6 +120,38 @@ final class ObjectiveCPatchabilityReportTests: XCTestCase {
         )
     }
 
+    func testOpaqueArgumentsAndKnownStructuresBecomePatchableWithoutArbitraryStructs() throws {
+        let metadata = ObjectiveCMetadata(
+            classes: [
+                makeClass(
+                    name: "ComplexFixture",
+                    methods: [
+                        makeMethod("runBlock:", encoding: "v24@0:8@?16"),
+                        makeMethod("usePointer:", encoding: "v24@0:8^v16"),
+                        makeMethod(
+                            "useRect:",
+                            encoding: "v48@0:8{CGRect={CGPoint=dd}{CGSize=dd}}16"
+                        ),
+                        makeMethod("range", encoding: "{_NSRange=QQ}16@0:8"),
+                        makeMethod("unknownPoint", encoding: "{Point=dd}16@0:8"),
+                    ]
+                )
+            ],
+            protocols: [],
+            categories: []
+        )
+
+        let report = ObjectiveCPatchabilityAnalyzer.report(for: metadata)
+        let methods = Dictionary(uniqueKeysWithValues: report.methods.map { ($0.selector, $0) })
+
+        XCTAssertEqual(report.summary.patchableMethodCount, 4)
+        XCTAssertTrue(try XCTUnwrap(methods["runBlock:"]).isPatchable)
+        XCTAssertTrue(try XCTUnwrap(methods["usePointer:"]).isPatchable)
+        XCTAssertTrue(try XCTUnwrap(methods["useRect:"]).isPatchable)
+        XCTAssertTrue(try XCTUnwrap(methods["range"]).isPatchable)
+        assertIssue(.unsupportedReturnType, for: "unknownPoint", in: methods)
+    }
+
     func testReportOrderingAndCodableRoundTripAreDeterministic() throws {
         let metadata = ObjectiveCMetadata(
             classes: [

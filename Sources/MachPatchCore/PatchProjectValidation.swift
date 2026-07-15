@@ -541,8 +541,21 @@ public enum PatchActionCompatibility {
                 .logOriginalReturnValue,
                 .callOriginalAndReplace,
             ])
+        case .structure where signature.returnType.knownStructure != nil:
+            actions.append(.logOriginalReturnValue)
         default:
             break
+        }
+        if signature.explicitArguments.contains(where: { $0.kind == .pointer || $0.kind == .block })
+        {
+            let passThroughActions: Set<PatchActionKind> = [
+                .logInvocation,
+                .logArguments,
+                .logOriginalReturnValue,
+                .callOriginal,
+                .callOriginalAndReplace,
+            ]
+            actions.removeAll { !passThroughActions.contains($0) }
         }
         return actions.sorted { $0.rawValue < $1.rawValue }
     }
@@ -590,23 +603,44 @@ public enum PatchActionCompatibility {
         }
     }
 
-    static func isSupportedReturnType(_ kind: ObjectiveCTypeKind) -> Bool {
-        kind == .void || kind == .boolean || kind.isSignedInteger || kind.isUnsignedInteger
+    static func isSupportedReturnType(_ type: ObjectiveCType) -> Bool {
+        let kind = type.kind
+        return kind == .void || kind == .boolean || kind.isSignedInteger || kind.isUnsignedInteger
             || kind == .float || kind == .double || kind == .object || kind == .classObject
-            || kind == .selector
+            || kind == .selector || type.knownStructure != nil
     }
 
-    static func isSupportedArgumentType(_ kind: ObjectiveCTypeKind) -> Bool {
-        kind == .boolean || kind.isSignedInteger || kind.isUnsignedInteger || kind == .object
+    static func isSupportedArgumentType(_ type: ObjectiveCType) -> Bool {
+        let kind = type.kind
+        return kind == .boolean || kind.isSignedInteger || kind.isUnsignedInteger || kind == .object
             || kind == .float || kind == .double || kind == .classObject || kind == .selector
+            || kind == .pointer || kind == .block || type.knownStructure != nil
     }
 
     private static func isSupportedSignature(_ signature: ObjectiveCMethodSignature) -> Bool {
         signature.arguments.count >= 2
             && signature.arguments[0].kind == .object
             && signature.arguments[1].kind == .selector
-            && isSupportedReturnType(signature.returnType.kind)
-            && signature.explicitArguments.allSatisfy { isSupportedArgumentType($0.kind) }
+            && isSupportedReturnType(signature.returnType)
+            && signature.explicitArguments.allSatisfy(isSupportedArgumentType)
+    }
+
+    public static func supportsArgumentReplacement(for type: ObjectiveCType) -> Bool {
+        let kind = type.kind
+        return kind == .boolean || kind.isSignedInteger || kind.isUnsignedInteger
+            || kind == .float || kind == .double || kind == .object || kind == .classObject
+            || kind == .selector || kind == .pointer || kind == .block
+    }
+
+    public static func supportsCondition(for type: ObjectiveCType) -> Bool {
+        supportsArgumentReplacement(for: type)
+    }
+
+    public static func supportsConditionalReturn(for type: ObjectiveCType) -> Bool {
+        let kind = type.kind
+        return kind == .boolean || kind.isSignedInteger || kind.isUnsignedInteger
+            || kind == .float || kind == .double || kind == .object || kind == .classObject
+            || kind == .selector
     }
 
     static func returnValueIncompatibility(
@@ -640,7 +674,9 @@ public enum PatchActionCompatibility {
             return floatingPointError(value: value, kind: kind)
         case .nilValue:
             return kind == .object || kind == .classObject || kind == .selector
-                ? nil : "\(context) can use nil/NULL only for object, Class, or SEL values."
+                || kind == .pointer || kind == .block
+                ? nil
+                : "\(context) can use nil/NULL only for object, Class, SEL, block, or pointer values."
         case .string:
             return kind == .object ? nil : "\(context) can use a string only for object values."
         case .selector(let selector):

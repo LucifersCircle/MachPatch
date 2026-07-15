@@ -100,9 +100,11 @@ encodings are checked before installation, and only call-through actions retain 
 IMP.
 
 The test suite compiles a project covering every version 1 action and all supported argument ABI
-types with host Clang warnings treated as errors. It also compares the example against a checked-in
-source snapshot and verifies symlink-resistant atomic output behavior. The iPhoneOS syntax command
-above is the milestone acceptance check; producing a linked dylib belongs to the builder milestone.
+types with host Clang warnings treated as errors. A separate iPhoneOS compile probe covers opaque
+block/pointer arguments plus exact `CGPoint`, `CGSize`, `CGRect`, and `NSRange` argument and return
+conventions. It also compares the example against a checked-in source snapshot and verifies
+symlink-resistant atomic output behavior. The iPhoneOS syntax command above is the milestone
+acceptance check; producing a linked dylib belongs to the builder milestone.
 
 ## arm64 builder acceptance checks
 

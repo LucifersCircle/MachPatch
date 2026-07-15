@@ -95,6 +95,43 @@ public enum ObjectiveCTypeKind: String, Codable, Equatable, Hashable, Sendable {
     }
 }
 
+public enum ObjectiveCKnownStructure: String, Codable, Equatable, Hashable, Sendable {
+    case cgPoint = "CGPoint"
+    case cgSize = "CGSize"
+    case cgRect = "CGRect"
+    case nsRange = "NSRange"
+
+    public var requiresCoreGraphics: Bool {
+        switch self {
+        case .cgPoint, .cgSize, .cgRect: true
+        case .nsRange: false
+        }
+    }
+}
+
+extension ObjectiveCType {
+    public var knownStructure: ObjectiveCKnownStructure? {
+        guard kind == .structure else { return nil }
+        switch annotation {
+        case "CGPoint":
+            return children.map(\.kind) == [.double, .double] ? .cgPoint : nil
+        case "CGSize":
+            return children.map(\.kind) == [.double, .double] ? .cgSize : nil
+        case "CGRect":
+            guard children.count == 2,
+                children[0].knownStructure == .cgPoint,
+                children[1].knownStructure == .cgSize
+            else { return nil }
+            return .cgRect
+        case "_NSRange", "NSRange":
+            return children.map(\.kind) == [.unsignedLongLong, .unsignedLongLong]
+                ? .nsRange : nil
+        default:
+            return nil
+        }
+    }
+}
+
 public enum ObjectiveCTypeQualifier: String, Codable, Equatable, Sendable {
     case constant = "r"
     case input = "n"

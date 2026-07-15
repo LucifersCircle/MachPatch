@@ -138,14 +138,25 @@ Compatible signatures allow Boolean (`B`), signed and unsigned integer scalars, 
 `double` (`d`), Objective-C objects, class objects, selectors, and `void` returns. On supported
 64-bit iOS targets, an Objective-C `CGFloat` is represented by its analyzed `double` encoding; no
 source-level typedef guess is made. Legacy `c` is an integer by default, never an implicit
-Boolean. Long double, C strings, pointers, arrays, structures, unions, bit fields, blocks, and
-unknown types are decoded but rejected for patch generation until their complete ABI behavior is
-implemented.
+Boolean.
+
+Opaque pointer and block arguments are supported conservatively. They are accepted only by primary
+actions that call the original implementation, logged as addresses without dereferencing pointers
+or describing/invoking blocks, and may be replaced or compared only with explicit `NULL`/`nil`.
+Pointer and block return values remain unavailable.
+
+Four exact 64-bit iOS structure layouts are supported in argument and return positions: `CGPoint`,
+`CGSize`, `CGRect`, and `NSRange`. The structure name and complete decoded field layout must match;
+look-alike and anonymous structures remain unavailable. These values use typed pass-through and
+field logging only—MachPatch does not synthesize structure constants, replacements, or ordered
+conditions. Long double, C strings, arrays, arbitrary structures, unions, bit fields, and unknown
+types remain rejected.
 
 Selector colon count must match the number of explicit encoded arguments. Integer constants must
 fit the encoded width. Floating-point constants are rendered as locale-independent,
 round-trippable C literals after validation. Object strings are valid only for object returns,
-while `nil`/`NULL` is valid for object, class-object, or selector values.
+while `nil`/`NULL` is valid for object, class-object, selector, opaque-pointer argument, or block
+argument values.
 
 ## Validation
 
@@ -186,6 +197,9 @@ Floating-point trampolines use exact `float` or `double` function-pointer types 
 return positions. Logging promotes `float` to `double` for the variadic call and uses enough
 significant digits to preserve the encoded scalar value. Class and selector results remain typed
 as `Class` and `SEL`; they are never represented as integer or opaque pointer literals.
+Block arguments use an opaque Objective-C object parameter and pointer arguments use `void *`;
+generated presets never invoke or dereference them. Known structures use the SDK's exact named C
+types, and generation imports CoreGraphics only when a `CGPoint`, `CGSize`, or `CGRect` is present.
 
 Advanced effects are emitted in deterministic project order. Counters use atomic increments.
 Conditional returns run after before-effects and before argument replacement. Alerts add UIKit to

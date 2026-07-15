@@ -149,6 +149,13 @@ locale-independent C literals, and variadic logging uses explicit promotions. Cl
 values use `objc_getClass`, `sel_registerName`, and typed `Nil`/`NULL` expressions instead of raw
 addresses.
 
+Complex ABI support is deliberately tiered. Block arguments are represented as opaque Objective-C
+objects and pointer arguments as `void *`; only call-through actions may use them, logging exposes
+addresses only, and generated presets never dereference or invoke either value. `CGPoint`,
+`CGSize`, `CGRect`, and `NSRange` are recognized only when their names and complete 64-bit layouts
+match, then emitted as exact SDK C types. Arbitrary composites and pointer/block returns remain
+explicitly unsupported.
+
 Installers use exact `method_getTypeEncoding` comparisons, `class_getInstanceMethod` for instance
 methods, and the same lookup on `object_getClass(cls)` for class methods. State transitions are
 pending, installed, or permanently failed. The constructor tries once immediately, then performs

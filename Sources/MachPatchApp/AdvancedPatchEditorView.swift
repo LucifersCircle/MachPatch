@@ -126,20 +126,31 @@ struct AdvancedPatchEditorView: View {
                         $0.argumentIndex == index
                     }
                     VStack(alignment: .leading, spacing: 7) {
-                        Toggle(
-                            "Argument \(index + 1) · \(type.kind.displayName)",
-                            isOn: Binding(
-                                get: { replacement != nil },
-                                set: { enabled in setArgument(index, type: type, enabled: enabled) }
+                        if PatchActionCompatibility.supportsArgumentReplacement(for: type) {
+                            Toggle(
+                                "Argument \(index + 1) · \(type.displayName)",
+                                isOn: Binding(
+                                    get: { replacement != nil },
+                                    set: {
+                                        enabled in setArgument(index, type: type, enabled: enabled)
+                                    }
+                                )
                             )
-                        )
-                        if let replacement {
-                            typedValueEditor(
-                                replacement.value,
-                                type: type,
-                                label: "Replacement"
-                            ) { setArgumentValue(index, value: $0) }
-                            .padding(.leading, 18)
+                            if let replacement {
+                                typedValueEditor(
+                                    replacement.value,
+                                    type: type,
+                                    label: "Replacement"
+                                ) { setArgumentValue(index, value: $0) }
+                                .padding(.leading, 18)
+                            }
+                        } else {
+                            HStack {
+                                Text("Argument \(index + 1) · \(type.displayName)")
+                                Spacer()
+                                Text("Pass-through only")
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }
@@ -154,6 +165,14 @@ struct AdvancedPatchEditorView: View {
                 Text("Conditional Return")
                     .font(.subheadline.weight(.semibold))
                 Text("Unavailable because this method has no return value.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if !PatchActionCompatibility.supportsConditionalReturn(
+                for: signature.returnType
+            ) {
+                Text("Conditional Return")
+                    .font(.subheadline.weight(.semibold))
+                Text("Unavailable because this return type supports pass-through only.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
@@ -428,6 +447,14 @@ struct AdvancedPatchEditorView: View {
                     label,
                     text: Binding(get: { selector }, set: { onChange(.selector($0)) }))
             }
+        case .pointer:
+            Text("NULL pointer")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .block:
+            Text("nil block")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         default:
             Text("Unsupported value type")
                 .font(.caption)
@@ -570,8 +597,7 @@ struct AdvancedPatchEditorView: View {
             replaceAdvanced(conditionalReturn: .some(nil))
             return
         }
-        let source: PatchConditionSource =
-            signature.explicitArguments.isEmpty ? .invocationCount : .argument(0)
+        let source = defaultConditionSource
         let conditional = PatchConditionalReturn(
             condition: PatchCondition(
                 source: source,
@@ -709,9 +735,21 @@ struct AdvancedPatchEditorView: View {
     }
 
     private var conditionSources: [(id: String, title: String)] {
-        signature.explicitArguments.enumerated().map {
-            ("argument:\($0.offset)", "Argument \($0.offset + 1) · \($0.element.kind.displayName)")
+        signature.explicitArguments.enumerated().compactMap {
+            guard PatchActionCompatibility.supportsCondition(for: $0.element) else { return nil }
+            return (
+                "argument:\($0.offset)", "Argument \($0.offset + 1) · \($0.element.displayName)"
+            )
         } + [("invocationCount", "Invocation Count")]
+    }
+
+    private var defaultConditionSource: PatchConditionSource {
+        guard
+            let index = signature.explicitArguments.firstIndex(where: {
+                PatchActionCompatibility.supportsCondition(for: $0)
+            })
+        else { return .invocationCount }
+        return .argument(index)
     }
 
     private func sourceID(_ source: PatchConditionSource) -> String {
@@ -747,8 +785,7 @@ struct AdvancedPatchEditorView: View {
         case let kind where kind.isSignedInteger: .signedInteger(0)
         case let kind where kind.isUnsignedInteger: .unsignedInteger(0)
         case .float, .double: .floatingPoint(0)
-        case .object, .classObject: .nilValue
-        case .selector: .nilValue
+        case .object, .classObject, .selector, .pointer, .block: .nilValue
         default: .nilValue
         }
     }
@@ -810,6 +847,12 @@ private extension ObjectiveCTypeKind {
         case .selector: "Selector"
         default: rawValue
         }
+    }
+}
+
+private extension ObjectiveCType {
+    var displayName: String {
+        knownStructure?.rawValue ?? kind.displayName
     }
 }
 

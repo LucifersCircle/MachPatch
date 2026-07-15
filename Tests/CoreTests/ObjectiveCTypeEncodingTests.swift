@@ -92,6 +92,24 @@ final class ObjectiveCTypeEncodingTests: XCTestCase {
         XCTAssertEqual(signature.explicitArguments[2].count, 7)
     }
 
+    func testRecognizesOnlyExactSupportedStructureLayouts() throws {
+        XCTAssertEqual(try decode("{CGPoint=dd}@:").returnType.knownStructure, .cgPoint)
+        XCTAssertEqual(try decode("{CGSize=dd}@:").returnType.knownStructure, .cgSize)
+        XCTAssertEqual(
+            try decode("{CGRect={CGPoint=dd}{CGSize=dd}}@:").returnType.knownStructure,
+            .cgRect
+        )
+        XCTAssertEqual(try decode("{_NSRange=QQ}@:").returnType.knownStructure, .nsRange)
+        XCTAssertEqual(try decode("{NSRange=QQ}@:").returnType.knownStructure, .nsRange)
+
+        XCTAssertNil(try decode("{Point=dd}@:").returnType.knownStructure)
+        XCTAssertNil(try decode("{CGPoint=ff}@:").returnType.knownStructure)
+        XCTAssertNil(try decode("{_NSRange=II}@:").returnType.knownStructure)
+        XCTAssertNil(
+            try decode("{CGRect={CGPoint=ff}{CGSize=ff}}@:").returnType.knownStructure
+        )
+    }
+
     func testAcceptsSignedLayoutOffsetsAndWhitespace() throws {
         let signature = try decode("  v24  @+0  :-8  i16  ")
         XCTAssertEqual(signature.frameSize, 24)

@@ -196,6 +196,89 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
         XCTAssertEqual(process.terminationStatus, 0, diagnostics)
     }
 
+    func testComplexABITiersGenerateSafeTypedSourceAndPassDeviceClang() throws {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/xcrun") else {
+            throw XCTSkip("xcrun is unavailable")
+        }
+        let patches = [
+            makePatch(
+                index: 60,
+                selector: "runWithPointer:block:",
+                encoding: "v32@0:8^v16@?24",
+                action: .logArguments,
+                advanced: PatchAdvancedConfiguration(
+                    argumentReplacements: [
+                        PatchArgumentReplacement(argumentIndex: 0, value: .nilValue),
+                        PatchArgumentReplacement(argumentIndex: 1, value: .nilValue),
+                    ]
+                )
+            ),
+            makePatch(
+                index: 61,
+                selector: "usePoint:",
+                encoding: "v32@0:8{CGPoint=dd}16",
+                action: .logArguments
+            ),
+            makePatch(
+                index: 62,
+                selector: "size",
+                encoding: "{CGSize=dd}16@0:8",
+                action: .logOriginalReturnValue
+            ),
+            makePatch(
+                index: 63,
+                selector: "transformRect:",
+                encoding:
+                    "{CGRect={CGPoint=dd}{CGSize=dd}}48@0:8{CGRect={CGPoint=dd}{CGSize=dd}}16",
+                action: .logOriginalReturnValue
+            ),
+            makePatch(
+                index: 64,
+                selector: "range",
+                encoding: "{_NSRange=QQ}16@0:8",
+                action: .logOriginalReturnValue
+            ),
+        ]
+        let workspace = FileManager.default.temporaryDirectory.appending(
+            path: "MachPatch-ComplexABICompile-\(UUID().uuidString)",
+            directoryHint: .isDirectory
+        )
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let bundle = try ObjectiveCSourceGenerator().generate(makeProject(patches: patches))
+        let source = try XCTUnwrap(bundle.files.first?.contents)
+        let sourceURL = try XCTUnwrap(GeneratedSourceWriter.write(bundle, to: workspace).first)
+
+        XCTAssertTrue(source.contains("#import <CoreGraphics/CoreGraphics.h>"))
+        XCTAssertTrue(source.contains("void *, id"))
+        XCTAssertTrue(source.contains("argument0 = NULL;"))
+        XCTAssertTrue(source.contains("argument1 = nil;"))
+        XCTAssertTrue(source.contains("block address = %p"))
+        XCTAssertTrue(source.contains("pointer = %p"))
+        XCTAssertTrue(source.contains("CGPoint { x = %.17g, y = %.17g }"))
+        XCTAssertTrue(source.contains("CGSize { width = %.17g, height = %.17g }"))
+        XCTAssertTrue(source.contains("CGRect { x = %.17g, y = %.17g"))
+        XCTAssertTrue(source.contains("NSRange { location = %llu, length = %llu }"))
+
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(filePath: "/usr/bin/xcrun")
+        process.arguments = [
+            "--sdk", "iphoneos", "clang",
+            "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror",
+            "-fsyntax-only", "-arch", "arm64", "-miphoneos-version-min=15.0",
+            "-x", "objective-c", sourceURL.path,
+        ]
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+
+        let diagnostics = String(
+            decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self
+        )
+        XCTAssertEqual(process.terminationStatus, 0, diagnostics)
+    }
+
     func testAdvancedUIKitSourcePassesDeviceClangWarningsAsErrors() throws {
         guard FileManager.default.isExecutableFile(atPath: "/usr/bin/xcrun") else {
             throw XCTSkip("xcrun is unavailable")
