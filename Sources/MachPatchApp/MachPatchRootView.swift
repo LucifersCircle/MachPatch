@@ -2,7 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct MachPatchRootView: View {
-    @StateObject private var model = WorkspaceModel()
+    @ObservedObject var model: WorkspaceModel
 
     var body: some View {
         NavigationSplitView {
@@ -33,43 +33,13 @@ struct MachPatchRootView: View {
                     .disabled(model.projectDraft == nil)
 
                     Menu {
-                        if model.currentTargetIdentity == nil {
-                            Text("Analyze a Target First")
-                        } else if model.loadableSavedPatchProjects.isEmpty {
-                            Text("No Saved Patches for This Target")
-                        } else {
-                            ForEach(model.loadableSavedPatchProjects) { savedProject in
-                                Button {
-                                    model.loadPatch(savedProject)
-                                } label: {
-                                    Label(
-                                        savedPatchLabel(savedProject),
-                                        systemImage: savedPatchLoadSystemImage(savedProject)
-                                    )
-                                }
-                                .help(savedPatchLoadHelp(savedProject))
-                            }
-                        }
+                        LoadPatchProjectMenuItems(model: model)
                     } label: {
                         Label("Load Patch", systemImage: "tray.full")
                     }
 
                     Menu {
-                        if model.savedPatchProjects.isEmpty {
-                            Text("No Saved Patches")
-                        } else {
-                            ForEach(model.savedPatchProjects) { savedProject in
-                                Button {
-                                    model.requestDeleteSavedPatch(savedProject)
-                                } label: {
-                                    Label(
-                                        deleteSavedPatchLabel(savedProject), systemImage: "trash")
-                                }
-                                .help(
-                                    "Delete the saved patch for \(savedProject.targetExecutableName), executable \(savedProject.target.executableSHA256.prefix(8))."
-                                )
-                            }
-                        }
+                        DeleteSavedPatchProjectMenuItems(model: model)
                     } label: {
                         Label("Delete Saved Patch", systemImage: "trash")
                     }
@@ -172,34 +142,6 @@ struct MachPatchRootView: View {
         .modifier(TargetChangedConfirmation(model: model))
     }
 
-    private func savedPatchLabel(_ savedProject: SavedPatchProject) -> String {
-        let suffix = savedProject.patchCount == 1 ? "patch" : "patches"
-        return "\(savedProject.projectName) · \(savedProject.patchCount) \(suffix)"
-    }
-
-    private func deleteSavedPatchLabel(_ savedProject: SavedPatchProject) -> String {
-        let suffix = savedProject.patchCount == 1 ? "patch" : "patches"
-        return
-            "\(savedProject.projectName) · \(savedProject.targetExecutableName) · \(savedProject.patchCount) \(suffix)"
-    }
-
-    private func savedPatchLoadSystemImage(_ savedProject: SavedPatchProject) -> String {
-        guard let target = model.currentTargetIdentity else { return "hammer" }
-        return savedProject.isExactExecutableMatch(to: target)
-            ? "checkmark.circle" : "arrow.triangle.2.circlepath"
-    }
-
-    private func savedPatchLoadHelp(_ savedProject: SavedPatchProject) -> String {
-        guard let target = model.currentTargetIdentity else {
-            return savedProject.targetExecutableName
-        }
-        let match =
-            savedProject.isExactExecutableMatch(to: target)
-            ? "Exact executable match"
-            : "Same app, different executable build; compatibility will be checked"
-        return
-            "\(match) · \(savedProject.targetExecutableName) · \(savedProject.patchCount) patch\(savedProject.patchCount == 1 ? "" : "es")"
-    }
 }
 
 private struct DeletePatchConfirmation: ViewModifier {
