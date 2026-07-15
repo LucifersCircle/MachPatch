@@ -27,7 +27,7 @@ final class PatchDylibBuilderTests: XCTestCase {
 
         let firstDylib = try Data(contentsOf: dylibURL)
         XCTAssertEqual(firstDylib.last, 1)
-        XCTAssertEqual(firstRecord.formatVersion, 2)
+        XCTAssertEqual(firstRecord.formatVersion, 3)
         XCTAssertEqual(firstRecord.architecture, .arm64)
         XCTAssertEqual(firstRecord.minimumIOSVersion, "15.2")
         XCTAssertEqual(firstRecord.installName, "@rpath/FixturePatch.dylib")
@@ -35,6 +35,27 @@ final class PatchDylibBuilderTests: XCTestCase {
         XCTAssertEqual(firstRecord.slices.count, 1)
         XCTAssertEqual(firstRecord.slices[0].cpuSubtype, 0)
         XCTAssertEqual(firstRecord.capabilityProbes.map(\.requestedArchitecture), [.arm64])
+        XCTAssertEqual(
+            firstRecord.provenance?.targetExecutableSHA256,
+            String(repeating: "a", count: 64)
+        )
+        XCTAssertEqual(
+            firstRecord.provenance?.selectedImageSHA256,
+            String(repeating: "a", count: 64)
+        )
+        XCTAssertEqual(
+            firstRecord.provenance?.projectSHA256,
+            PatchBuildContentHasher.sha256(try PatchProjectCodec.encode(makeProject()))
+        )
+        XCTAssertEqual(
+            firstRecord.provenance?.generatedSourceSHA256,
+            try PatchBuildContentHasher.sha256(fileAt: URL(filePath: firstRecord.sourcePath))
+        )
+        XCTAssertEqual(
+            firstRecord.provenance?.outputSHA256,
+            try PatchBuildContentHasher.sha256(fileAt: URL(filePath: firstRecord.outputPath))
+        )
+        XCTAssertNil(firstRecord.provenance?.verification)
         XCTAssertEqual(
             progress.values.map(\.phase),
             [
@@ -316,6 +337,68 @@ final class PatchDylibBuilderTests: XCTestCase {
         }
     }
 
+    func testProvenanceHashesChangeOnlyWithTheirRecordedContent() throws {
+        let workspace = temporaryWorkspace(named: "Provenance")
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let runner = FakeBuildCommandRunner()
+        let builder = makeBuilder(runner)
+
+        let baseline = try builder.build(
+            makeProject(),
+            outputDirectory: workspace.appending(path: "baseline")
+        )
+        let repeated = try builder.build(
+            makeProject(),
+            outputDirectory: workspace.appending(path: "repeated")
+        )
+        XCTAssertEqual(baseline.provenance, repeated.provenance)
+
+        let renamed = try builder.build(
+            makeProject(projectName: "Renamed Fixture"),
+            outputDirectory: workspace.appending(path: "renamed")
+        )
+        XCTAssertNotEqual(
+            baseline.provenance?.projectSHA256,
+            renamed.provenance?.projectSHA256
+        )
+        XCTAssertEqual(
+            baseline.provenance?.generatedSourceSHA256,
+            renamed.provenance?.generatedSourceSHA256
+        )
+        XCTAssertEqual(baseline.provenance?.outputSHA256, renamed.provenance?.outputSHA256)
+
+        let changedAction = try builder.build(
+            makeProject(returnBoolean: false),
+            outputDirectory: workspace.appending(path: "changed-action")
+        )
+        XCTAssertNotEqual(
+            baseline.provenance?.generatedSourceSHA256,
+            changedAction.provenance?.generatedSourceSHA256
+        )
+        XCTAssertEqual(
+            baseline.provenance?.targetExecutableSHA256,
+            changedAction.provenance?.targetExecutableSHA256
+        )
+
+        runner.compilerMarker = 2
+        let changedOutput = try builder.build(
+            makeProject(),
+            outputDirectory: workspace.appending(path: "changed-output")
+        )
+        XCTAssertEqual(
+            baseline.provenance?.projectSHA256,
+            changedOutput.provenance?.projectSHA256
+        )
+        XCTAssertEqual(
+            baseline.provenance?.generatedSourceSHA256,
+            changedOutput.provenance?.generatedSourceSHA256
+        )
+        XCTAssertNotEqual(
+            baseline.provenance?.outputSHA256,
+            changedOutput.provenance?.outputSHA256
+        )
+    }
+
     private func makeBuilder(_ runner: FakeBuildCommandRunner) -> PatchDylibBuilder {
         PatchDylibBuilder(
             commandRunner: runner,
@@ -331,13 +414,15 @@ final class PatchDylibBuilderTests: XCTestCase {
     }
 
     private func makeProject(
+        projectName: String = "Builder Fixture",
         architectureMode: PatchArchitectureMode = .automatic,
         targetArchitecture: MachOArchitecture = .arm64,
-        targetCPUSubtype: Int32? = nil
+        targetCPUSubtype: Int32? = nil,
+        returnBoolean: Bool = true
     ) -> PatchProject {
         let subtype = targetCPUSubtype ?? (targetArchitecture == .arm64 ? 0 : 2)
         return PatchProject(
-            projectName: "Builder Fixture",
+            projectName: projectName,
             target: PatchTargetIdentity(
                 bundleIdentifier: "com.example.fixture",
                 executableName: "Fixture",
@@ -362,7 +447,7 @@ final class PatchDylibBuilderTests: XCTestCase {
                     selector: "featureEnabled",
                     methodKind: .instance,
                     expectedTypeEncoding: "B@:",
-                    action: .returnBoolean(true)
+                    action: .returnBoolean(returnBoolean)
                 )
             ]
         )

@@ -4,6 +4,7 @@ import MachPatchAnalyzer
 import MachPatchBuilder
 import MachPatchCore
 import MachPatchGenerator
+import MachPatchPackager
 import MachPatchVerifier
 
 @main
@@ -33,6 +34,9 @@ struct MachPatchCommand {
                                  arm64e, or universal.
           verify <dylib> [--target <path>] [--json]
                                  Audit LiveContainer compatibility, optionally against a target.
+          package <project> --format <source|deb> --output <directory>
+                  [--arch <mode>] [--target <path>]
+                                 Build, verify, and package a source archive or Debian package.
 
         OPTIONS:
           --version             Show the MachPatch version.
@@ -140,6 +144,17 @@ struct MachPatchCommand {
                 dylibPath: arguments[1],
                 targetPath: options.targetPath,
                 json: options.json
+            )
+        case "package":
+            guard let options = parsePackageOptions(arguments) else {
+                writeError(
+                    "Usage: machpatch package <project.json> --format source|deb --output <directory> [--arch automatic|arm64|arm64e|universal] [--target <path>]\n"
+                )
+                exit(EX_USAGE)
+            }
+            package(
+                projectPath: arguments[1],
+                options: options
             )
         default:
             writeError("Unknown command or option: \(arguments[0])\n\n\(help)\n")
@@ -473,6 +488,176 @@ struct MachPatchCommand {
         }
         return VerifyOptions(targetPath: targetPath, json: json)
     }
+
+    private static func package(
+        projectPath: String,
+        options: PackageOptions
+    ) {
+        do {
+            let projectURL = URL(filePath: projectPath).standardizedFileURL
+            let project = try readProject(at: projectURL)
+            let outputDirectory = URL(filePath: options.outputPath).standardizedFileURL
+            try preparePackageOutputDirectory(outputDirectory)
+            let packageURL = outputDirectory.appending(
+                path: options.format.filename(outputName: project.build.outputName)
+            )
+            try removePreviousPackageOutput(at: packageURL)
+
+            var record = try PatchDylibBuilder().build(
+                project,
+                outputDirectory: outputDirectory,
+                architectureMode: options.architectureMode
+            )
+            let dylibURL = URL(filePath: record.outputPath)
+            let verification = try verifyPackageArtifact(
+                dylibURL: dylibURL,
+                project: project,
+                targetPath: options.targetPath
+            )
+            record = try PatchBuildProvenanceRecorder.record(
+                verification: verification,
+                in: record
+            )
+            guard verification.isReadyForLiveContainerTesting else {
+                throw CLIError(
+                    "The built dylib failed verification; inspect \(record.recordPath) for provenance and run 'machpatch verify \(record.outputPath) --json' for details."
+                )
+            }
+
+            let packagedFile: (filename: String, contents: Data) =
+                switch options.format {
+                case .source:
+                    try {
+                        let archive = try PatchSourceArchiveBuilder().build(
+                            project: project,
+                            buildRecord: record,
+                            sourceURL: URL(filePath: record.sourcePath)
+                        )
+                        return (archive.filename, archive.contents)
+                    }()
+                case .deb:
+                    try {
+                        let package = try DebianPackageBuilder().build(
+                            project: project,
+                            buildRecord: record,
+                            dylibURL: dylibURL
+                        )
+                        return (package.filename, package.contents)
+                    }()
+                }
+            guard packagedFile.filename == packageURL.lastPathComponent else {
+                throw CLIError("The packager returned an unexpected output filename.")
+            }
+            try writePackageFile(packagedFile.contents, to: packageURL)
+            guard let verificationRecord = record.provenance?.verification else {
+                throw CLIError("The completed build record is missing its verification result.")
+            }
+            try writeJSON(
+                PackageOutput(
+                    format: options.format,
+                    projectPath: projectURL.path,
+                    packagePath: packageURL.path,
+                    dylibPath: record.outputPath,
+                    buildRecordPath: record.recordPath,
+                    verification: verificationRecord
+                )
+            )
+        } catch {
+            writeError("error: \(error.localizedDescription)\n")
+            exit(EXIT_FAILURE)
+        }
+    }
+
+    private static func parsePackageOptions(_ arguments: [String]) -> PackageOptions? {
+        guard arguments.count >= 6, arguments.count.isMultiple(of: 2) else { return nil }
+        var format: PatchPackageFormat?
+        var outputPath: String?
+        var architectureMode: PatchArchitectureMode?
+        var targetPath: String?
+        var index = 2
+        while index < arguments.count {
+            let flag = arguments[index]
+            let value = arguments[index + 1]
+            switch flag {
+            case "--format" where format == nil:
+                format = PatchPackageFormat(rawValue: value)
+            case "--output" where outputPath == nil:
+                outputPath = value
+            case "--arch" where architectureMode == nil:
+                architectureMode = PatchArchitectureMode(rawValue: value)
+            case "--target" where targetPath == nil:
+                targetPath = value
+            default:
+                return nil
+            }
+            if (flag == "--format" && format == nil)
+                || (flag == "--arch" && architectureMode == nil)
+            {
+                return nil
+            }
+            index += 2
+        }
+        guard let format, let outputPath else { return nil }
+        return PackageOptions(
+            format: format,
+            outputPath: outputPath,
+            architectureMode: architectureMode,
+            targetPath: targetPath
+        )
+    }
+
+    private static func verifyPackageArtifact(
+        dylibURL: URL,
+        project: PatchProject,
+        targetPath: String?
+    ) throws -> DylibVerificationReport {
+        guard let targetPath else {
+            return try LiveContainerVerifier().verify(dylibURL: dylibURL)
+        }
+        return try InputResolver().withResolvedTarget(at: URL(filePath: targetPath)) { target in
+            let image = try AnalyzedPatchProjectValidator.selectedImage(for: project, in: target)
+            let slices = try MachOInspector().inspect(at: image.executableURL)
+            let inspection = MachOInspection(target: target, image: image, slices: slices)
+            return try LiveContainerVerifier().verify(
+                dylibURL: dylibURL,
+                targetInspection: inspection
+            )
+        }
+    }
+
+    private static func preparePackageOutputDirectory(_ url: URL) throws {
+        if FileManager.default.fileExists(atPath: url.path) {
+            let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard values.isDirectory == true, values.isSymbolicLink != true else {
+                throw CLIError("Package output must be a non-symbolic-link directory: \(url.path)")
+            }
+            return
+        }
+        try FileManager.default.createDirectory(
+            at: url,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+    }
+
+    private static func writePackageFile(_ data: Data, to url: URL) throws {
+        guard (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) == nil else {
+            throw CLIError("Refusing to replace symbolic-link package output: \(url.path)")
+        }
+        try data.write(to: url, options: [.atomic])
+    }
+
+    private static func removePreviousPackageOutput(at url: URL) throws {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        let values = try url.resourceValues(forKeys: [
+            .isRegularFileKey,
+            .isSymbolicLinkKey,
+        ])
+        guard values.isRegularFile == true, values.isSymbolicLink != true else {
+            throw CLIError("Refusing to replace unsafe package output: \(url.path)")
+        }
+        try FileManager.default.removeItem(at: url)
+    }
 }
 
 private struct ClassListOutput: Encodable {
@@ -621,4 +806,34 @@ private struct BuildOptions {
 private struct VerifyOptions {
     let targetPath: String?
     let json: Bool
+}
+
+private enum PatchPackageFormat: String, Codable {
+    case source
+    case deb
+
+    func filename(outputName: String) -> String {
+        switch self {
+        case .source:
+            "\(outputName)Source.zip"
+        case .deb:
+            "\(outputName).deb"
+        }
+    }
+}
+
+private struct PackageOptions {
+    let format: PatchPackageFormat
+    let outputPath: String
+    let architectureMode: PatchArchitectureMode?
+    let targetPath: String?
+}
+
+private struct PackageOutput: Encodable {
+    let format: PatchPackageFormat
+    let projectPath: String
+    let packagePath: String
+    let dylibPath: String
+    let buildRecordPath: String
+    let verification: PatchBuildVerificationRecord
 }

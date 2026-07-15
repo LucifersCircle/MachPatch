@@ -676,32 +676,40 @@ struct BuildWorkspaceView: View {
                     verificationReport(report)
                 }
 
-                Button {
-                    model.exportDylib()
-                } label: {
-                    Label("Export Dylib…", systemImage: "square.and.arrow.down")
+                HStack(spacing: 8) {
+                    Button {
+                        model.exportDylib()
+                    } label: {
+                        Label("Export Dylib…", systemImage: "square.and.arrow.down")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!model.canExportDylib)
+                    .help(exportHelpText)
+
+                    shareButton(for: .dylib)
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(!model.canExportDylib)
-                .help(exportHelpText)
 
                 Divider()
 
                 Text("Optional Formats")
                     .font(.subheadline.weight(.semibold))
 
-                Button {
-                    model.exportSourceBundle()
-                } label: {
-                    Label("Export Source Bundle (.zip)…", systemImage: "doc.zipper")
+                HStack(spacing: 8) {
+                    Button {
+                        model.exportSourceBundle()
+                    } label: {
+                        Label("Export Source Bundle (.zip)…", systemImage: "doc.zipper")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!model.canExportSourceBundle)
+                    .help(
+                        model.canExportSourceBundle
+                            ? "Export patch.json, deterministic generated source, and an Xcode rebuild script."
+                            : "A fresh successful build is required before source export."
+                    )
+
+                    shareButton(for: .sourceBundle)
                 }
-                .buttonStyle(.bordered)
-                .disabled(!model.canExportSourceBundle)
-                .help(
-                    model.canExportSourceBundle
-                        ? "Export patch.json, deterministic generated source, and an Xcode rebuild script."
-                        : "A fresh successful build is required before source export."
-                )
 
                 Text(
                     "A portable archive containing the canonical patch project, generated Objective-C, target identity, and a standalone build script."
@@ -709,17 +717,21 @@ struct BuildWorkspaceView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-                Button {
-                    model.exportDebianPackage()
-                } label: {
-                    Label("Export .deb…", systemImage: "shippingbox")
+                HStack(spacing: 8) {
+                    Button {
+                        model.exportDebianPackage()
+                    } label: {
+                        Label("Export .deb…", systemImage: "shippingbox")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!model.canExportDebianPackage)
+                    .help(
+                        model.debianExportUnavailableReason
+                            ?? "Package the verified arm64 dylib with its MobileSubstrate filter plist."
+                    )
+
+                    shareButton(for: .debianPackage)
                 }
-                .buttonStyle(.bordered)
-                .disabled(!model.canExportDebianPackage)
-                .help(
-                    model.debianExportUnavailableReason
-                        ?? "Package the verified arm64 dylib with its MobileSubstrate filter plist."
-                )
 
                 Text(
                     model.debianExportUnavailableReason
@@ -728,19 +740,28 @@ struct BuildWorkspaceView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-                if let completedExport = model.lastCompletedExport,
-                    completedExport.kind != .patchProject
-                {
-                    Divider()
-                    ShareLink(item: completedExport.url) {
-                        Label(completedExport.shareLabel, systemImage: "square.and.arrow.up")
-                    }
-                    .buttonStyle(.bordered)
-                    .help("Open the native macOS share sheet for this completed export.")
-                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(8)
+        }
+    }
+
+    @ViewBuilder
+    private func shareButton(for kind: WorkspaceExportKind) -> some View {
+        if let completedExport = model.shareableArtifact(for: kind) {
+            ShareLink(item: completedExport.url) {
+                Label("Share…", systemImage: "square.and.arrow.up")
+            }
+            .buttonStyle(.bordered)
+            .help("Share \(completedExport.url.lastPathComponent) using macOS.")
+        } else {
+            Button {
+            } label: {
+                Label("Share…", systemImage: "square.and.arrow.up")
+            }
+            .buttonStyle(.bordered)
+            .disabled(true)
+            .help("Export this format before sharing it.")
         }
     }
 

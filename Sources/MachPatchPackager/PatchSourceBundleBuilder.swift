@@ -14,7 +14,8 @@ public struct PatchSourceBundleBuilder: Sendable {
             project: project,
             buildRecord: buildRecord,
             artifactURL: sourceURL,
-            expectedRecordedPath: buildRecord.sourcePath
+            expectedRecordedPath: buildRecord.sourcePath,
+            expectedSHA256: buildRecord.provenance?.generatedSourceSHA256
         )
         let projectJSON = try PatchProjectCodec.encode(project)
         let buildScript = Self.buildScript(project: project, buildRecord: buildRecord)

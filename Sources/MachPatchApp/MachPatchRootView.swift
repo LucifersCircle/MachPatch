@@ -58,10 +58,34 @@ struct MachPatchRootView: View {
                     }
                     .disabled(model.projectDraft == nil)
 
-                    if let completedExport = model.lastCompletedExport {
-                        Divider()
+                    if let completedExport = model.shareableArtifact(for: .patchProject) {
                         ShareLink(item: completedExport.url) {
-                            Label(completedExport.shareLabel, systemImage: "square.and.arrow.up")
+                            Label("Share Patch…", systemImage: "square.and.arrow.up")
+                        }
+                    }
+
+                    Divider()
+
+                    Button {
+                        model.buildDylib()
+                    } label: {
+                        Label(
+                            model.buildState.artifact == nil ? "Build Dylib" : "Rebuild Dylib",
+                            systemImage: "hammer.fill"
+                        )
+                    }
+                    .disabled(!model.canBuild)
+
+                    Button {
+                        model.exportDylib()
+                    } label: {
+                        Label("Export Dylib…", systemImage: "square.and.arrow.down")
+                    }
+                    .disabled(!model.canExportDylib)
+
+                    if let completedExport = model.shareableArtifact(for: .dylib) {
+                        ShareLink(item: completedExport.url) {
+                            Label("Share Dylib…", systemImage: "square.and.arrow.up")
                         }
                     }
                 } label: {

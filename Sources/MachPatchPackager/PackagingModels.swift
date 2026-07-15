@@ -85,7 +85,8 @@ enum ArtifactPackagingValidator {
         project: PatchProject,
         buildRecord: PatchBuildRecord,
         artifactURL: URL,
-        expectedRecordedPath: String
+        expectedRecordedPath: String,
+        expectedSHA256: String?
     ) throws -> Data {
         let report = PatchProjectValidator.validate(project)
         guard report.isValid else {
@@ -100,6 +101,28 @@ enum ArtifactPackagingValidator {
         let expectedInstallName = "@rpath/\(project.build.outputName).dylib"
         guard buildRecord.installName == expectedInstallName else {
             throw PatchPackagingError.buildRecordMismatch("install names differ")
+        }
+        if let provenance = buildRecord.provenance {
+            guard
+                provenance.targetExecutableSHA256.caseInsensitiveCompare(
+                    project.target.executableSHA256
+                ) == .orderedSame
+            else {
+                throw PatchPackagingError.buildRecordMismatch("target executable hashes differ")
+            }
+            guard
+                provenance.selectedImageSHA256.caseInsensitiveCompare(
+                    project.target.selectedImage.executableSHA256
+                ) == .orderedSame
+            else {
+                throw PatchPackagingError.buildRecordMismatch("selected image hashes differ")
+            }
+            let projectSHA256 = PatchBuildContentHasher.sha256(
+                try PatchProjectCodec.encode(project)
+            )
+            guard provenance.projectSHA256 == projectSHA256 else {
+                throw PatchPackagingError.buildRecordMismatch("project hashes differ")
+            }
         }
         guard
             artifactURL.standardizedFileURL.path
@@ -129,7 +152,17 @@ enum ArtifactPackagingValidator {
             throw PatchPackagingError.artifactTooLarge(artifactURL.path)
         }
         do {
-            return try Data(contentsOf: artifactURL, options: .mappedIfSafe)
+            let data = try Data(contentsOf: artifactURL, options: .mappedIfSafe)
+            if let expectedSHA256,
+                PatchBuildContentHasher.sha256(data) != expectedSHA256
+            {
+                throw PatchPackagingError.buildRecordMismatch(
+                    "artifact content hash differs for \(artifactURL.lastPathComponent)"
+                )
+            }
+            return data
+        } catch let error as PatchPackagingError {
+            throw error
         } catch {
             throw PatchPackagingError.unreadableArtifact(artifactURL.path)
         }

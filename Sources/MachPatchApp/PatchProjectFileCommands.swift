@@ -44,6 +44,28 @@ struct PatchProjectFileCommands: Commands {
     }
 }
 
+struct PatchBuildCommands: Commands {
+    @ObservedObject var model: WorkspaceModel
+
+    var body: some Commands {
+        CommandMenu("Build") {
+            Button(model.buildState.artifact == nil ? "Build Dylib" : "Rebuild Dylib") {
+                model.buildDylib()
+            }
+            .keyboardShortcut("b", modifiers: .command)
+            .disabled(!model.canBuild)
+
+            Divider()
+
+            Button("Export Dylib…") {
+                model.exportDylib()
+            }
+            .keyboardShortcut("e", modifiers: [.command, .shift])
+            .disabled(!model.canExportDylib)
+        }
+    }
+}
+
 struct LoadPatchProjectMenuItems: View {
     @ObservedObject var model: WorkspaceModel
 

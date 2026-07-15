@@ -57,7 +57,7 @@ private struct TargetAnalysisCacheKey: Hashable {
     let sliceIndex: Int
 }
 
-enum WorkspaceExportKind: String, Equatable {
+enum WorkspaceExportKind: String, Equatable, Hashable {
     case patchProject = "Patch Project"
     case dylib = "Dylib"
     case sourceBundle = "Source Bundle"
@@ -103,6 +103,9 @@ final class WorkspaceModel: ObservableObject {
     @Published var isDebianPackageExporterPresented = false
     @Published private(set) var debianPackageExportDocument: DebianPackageExportDocument?
     @Published private(set) var lastCompletedExport: CompletedWorkspaceExport?
+    @Published private(set) var shareableArtifacts:
+        [WorkspaceExportKind: CompletedWorkspaceExport] =
+            [:]
     @Published var workspaceAlert: WorkspaceAlert?
     @Published var pendingProjectImport: PendingProjectImport?
     @Published private(set) var generatedSourcePreview: GeneratedSourcePreviewState =
@@ -515,6 +518,10 @@ final class WorkspaceModel: ObservableObject {
         "\(projectDraft?.outputName ?? "MachPatch").deb"
     }
 
+    func shareableArtifact(for kind: WorkspaceExportKind) -> CompletedWorkspaceExport? {
+        shareableArtifacts[kind]
+    }
+
     func exportPatch() {
         guard let projectDraft else {
             workspaceAlert = WorkspaceAlert(
@@ -645,7 +652,7 @@ final class WorkspaceModel: ObservableObject {
         switch result {
         case .success(let url):
             savedProjectBaseline = patchProject
-            lastCompletedExport = CompletedWorkspaceExport(kind: .patchProject, url: url)
+            completeExport(kind: .patchProject, url: url)
         case .failure(let error):
             workspaceAlert = WorkspaceAlert(
                 title: "Couldn’t Export Patch",
@@ -687,12 +694,7 @@ final class WorkspaceModel: ObservableObject {
     func handleDylibExport(_ result: Result<URL, any Error>) {
         switch result {
         case .success(let url):
-            lastCompletedExport = CompletedWorkspaceExport(kind: .dylib, url: url)
-            workspaceAlert = WorkspaceAlert(
-                title: "Dylib Exported",
-                message:
-                    "Saved \(url.lastPathComponent) to \(url.deletingLastPathComponent().path)."
-            )
+            completeExport(kind: .dylib, url: url)
         case .failure(let error):
             workspaceAlert = WorkspaceAlert(
                 title: "Couldn’t Export Dylib",
@@ -733,7 +735,6 @@ final class WorkspaceModel: ObservableObject {
         handleOptionalExport(
             result,
             kind: .sourceBundle,
-            successTitle: "Source Bundle Exported",
             failureTitle: "Couldn’t Export Source Bundle"
         )
         sourceBundleExportDocument = nil
@@ -772,7 +773,6 @@ final class WorkspaceModel: ObservableObject {
         handleOptionalExport(
             result,
             kind: .debianPackage,
-            successTitle: "Debian Package Exported",
             failureTitle: "Couldn’t Export Debian Package"
         )
         debianPackageExportDocument = nil
@@ -781,23 +781,23 @@ final class WorkspaceModel: ObservableObject {
     private func handleOptionalExport(
         _ result: Result<URL, any Error>,
         kind: WorkspaceExportKind,
-        successTitle: String,
         failureTitle: String
     ) {
         switch result {
         case .success(let url):
-            lastCompletedExport = CompletedWorkspaceExport(kind: kind, url: url)
-            workspaceAlert = WorkspaceAlert(
-                title: successTitle,
-                message:
-                    "Saved \(url.lastPathComponent) to \(url.deletingLastPathComponent().path)."
-            )
+            completeExport(kind: kind, url: url)
         case .failure(let error):
             workspaceAlert = WorkspaceAlert(
                 title: failureTitle,
                 message: error.localizedDescription
             )
         }
+    }
+
+    private func completeExport(kind: WorkspaceExportKind, url: URL) {
+        let completedExport = CompletedWorkspaceExport(kind: kind, url: url)
+        lastCompletedExport = completedExport
+        shareableArtifacts[kind] = completedExport
     }
 
     func openProject(at projectURL: URL) {
@@ -996,6 +996,7 @@ final class WorkspaceModel: ObservableObject {
             return
         }
 
+        clearShareableBuildArtifacts()
         let buildID = UUID()
         let previousArtifact = buildState.artifact
         self.buildID = buildID
@@ -1043,19 +1044,53 @@ final class WorkspaceModel: ObservableObject {
                 self.verificationState = .verifying
 
                 do {
-                    let report = try await Task.detached(priority: .userInitiated) {
-                        try verificationService.verify(
+                    let verification = try await Task.detached(priority: .userInitiated) {
+                        let report = try verificationService.verify(
                             artifact: artifact,
                             targetInspection: targetInspection
                         )
+                        let record = try PatchBuildProvenanceRecorder.record(
+                            verification: report,
+                            in: artifact.record
+                        )
+                        return (report, record)
                     }.value
                     guard self.buildID == buildID else { return }
+                    let verifiedArtifact = PatchBuildArtifact(
+                        workspaceURL: artifact.workspaceURL,
+                        record: verification.1
+                    )
                     self.buildID = nil
-                    self.verificationState = .verified(report)
+                    self.buildState = .succeeded(verifiedArtifact)
+                    self.verificationState = .verified(verification.0)
+                    self.prepareShareableBuildArtifacts(
+                        project: project,
+                        artifact: verifiedArtifact,
+                        verifiedForDeployment: verification.0.isReadyForLiveContainerTesting
+                    )
                 } catch {
                     guard self.buildID == buildID else { return }
                     self.buildID = nil
+                    var shareArtifact = artifact
+                    if let failedRecord =
+                        try? PatchBuildProvenanceRecorder
+                        .recordVerificationFailure(
+                            error.localizedDescription,
+                            in: artifact.record
+                        )
+                    {
+                        shareArtifact = PatchBuildArtifact(
+                            workspaceURL: artifact.workspaceURL,
+                            record: failedRecord
+                        )
+                        self.buildState = .succeeded(shareArtifact)
+                    }
                     self.verificationState = .failed(PatchVerificationFailure(error: error))
+                    self.prepareShareableBuildArtifacts(
+                        project: project,
+                        artifact: shareArtifact,
+                        verifiedForDeployment: false
+                    )
                 }
             } catch {
                 guard let self, self.buildID == buildID else { return }
@@ -1065,6 +1100,69 @@ final class WorkspaceModel: ObservableObject {
                     previousArtifact: previousArtifact
                 )
             }
+        }
+    }
+
+    private func clearShareableBuildArtifacts() {
+        shareableArtifacts[.dylib] = nil
+        shareableArtifacts[.sourceBundle] = nil
+        shareableArtifacts[.debianPackage] = nil
+    }
+
+    private func prepareShareableBuildArtifacts(
+        project: PatchProject,
+        artifact: PatchBuildArtifact,
+        verifiedForDeployment: Bool
+    ) {
+        let shareDirectory = artifact.workspaceURL.appending(
+            path: "Share",
+            directoryHint: .isDirectory
+        )
+        do {
+            try FileManager.default.createDirectory(
+                at: shareDirectory,
+                withIntermediateDirectories: true
+            )
+            let archive = try PatchSourceArchiveBuilder().build(
+                project: project,
+                buildRecord: artifact.record,
+                sourceURL: artifact.sourceURL
+            )
+            let archiveURL = shareDirectory.appending(path: archive.filename)
+            try archive.contents.write(to: archiveURL, options: .atomic)
+            shareableArtifacts[.sourceBundle] = CompletedWorkspaceExport(
+                kind: .sourceBundle,
+                url: archiveURL
+            )
+        } catch {
+            shareableArtifacts[.sourceBundle] = nil
+        }
+
+        guard verifiedForDeployment else {
+            shareableArtifacts[.dylib] = nil
+            shareableArtifacts[.debianPackage] = nil
+            return
+        }
+
+        shareableArtifacts[.dylib] = CompletedWorkspaceExport(
+            kind: .dylib,
+            url: artifact.dylibURL
+        )
+
+        do {
+            let package = try DebianPackageBuilder().build(
+                project: project,
+                buildRecord: artifact.record,
+                dylibURL: artifact.dylibURL
+            )
+            let packageURL = shareDirectory.appending(path: package.filename)
+            try package.contents.write(to: packageURL, options: .atomic)
+            shareableArtifacts[.debianPackage] = CompletedWorkspaceExport(
+                kind: .debianPackage,
+                url: packageURL
+            )
+        } catch {
+            shareableArtifacts[.debianPackage] = nil
         }
     }
 
@@ -1330,6 +1428,8 @@ final class WorkspaceModel: ObservableObject {
         sourceBundleExportDocument = nil
         isDebianPackageExporterPresented = false
         debianPackageExportDocument = nil
+        shareableArtifacts = [:]
+        lastCompletedExport = nil
     }
 
     private func resetBuildState(removingArtifact: Bool) {

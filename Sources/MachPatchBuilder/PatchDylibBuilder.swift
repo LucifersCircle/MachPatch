@@ -51,6 +51,7 @@ public struct PatchDylibBuilder: Sendable {
         }
 
         report(.generatingSource, message: "Generating deterministic Objective-C source…")
+        let projectData = try PatchProjectCodec.encode(project)
         let sourceBundle = try ObjectiveCSourceGenerator().generate(project)
         let outputDirectory = outputDirectory.standardizedFileURL
         let sourceURL =
@@ -151,6 +152,7 @@ public struct PatchDylibBuilder: Sendable {
             }
 
             report(.recordingOutput, message: "Recording reproducible build metadata…")
+            let sourceData = try Data(contentsOf: sourceURL, options: .mappedIfSafe)
             let record = PatchBuildRecord(
                 projectName: project.projectName,
                 architecture: resolution.outputArchitecture,
@@ -164,9 +166,16 @@ public struct PatchDylibBuilder: Sendable {
                 capabilityProbes: probes,
                 slices: sliceRecords,
                 symbolChecks: symbolChecks,
-                merge: merge
+                merge: merge,
+                provenance: PatchBuildProvenance(
+                    targetExecutableSHA256: project.target.executableSHA256,
+                    selectedImageSHA256: project.target.selectedImage.executableSHA256,
+                    projectSHA256: PatchBuildContentHasher.sha256(projectData),
+                    generatedSourceSHA256: PatchBuildContentHasher.sha256(sourceData),
+                    outputSHA256: try PatchBuildContentHasher.sha256(fileAt: outputURL)
+                )
             )
-            try writeRecord(record, to: recordURL)
+            try PatchBuildRecordCodec.write(record, to: recordURL)
             completedUnitCount += 1
             report(.completed, message: "Dylib build completed.")
             return record
@@ -524,16 +533,6 @@ public struct PatchDylibBuilder: Sendable {
         (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) != nil
     }
 
-    private func writeRecord(_ record: PatchBuildRecord, to url: URL) throws {
-        guard !isSymbolicLink(at: url) else {
-            throw PatchDylibBuilderError.unsafeOutputPath(url.path)
-        }
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        var data = try encoder.encode(record)
-        data.append(0x0A)
-        try data.write(to: url, options: [.atomic])
-    }
 }
 
 public enum PatchDylibBuilderError: Error, Equatable, LocalizedError, Sendable {

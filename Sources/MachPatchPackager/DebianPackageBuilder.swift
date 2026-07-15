@@ -22,7 +22,8 @@ public struct DebianPackageBuilder: Sendable {
             project: project,
             buildRecord: buildRecord,
             artifactURL: dylibURL,
-            expectedRecordedPath: buildRecord.outputPath
+            expectedRecordedPath: buildRecord.outputPath,
+            expectedSHA256: buildRecord.provenance?.outputSHA256
         )
         let packageIdentifier = Self.packageIdentifier(
             targetBundleIdentifier: bundleIdentifier,

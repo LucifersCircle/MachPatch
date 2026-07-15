@@ -216,7 +216,9 @@ The command writes `MachPatchGenerated.m`, the configured `<outputName>.dylib`, 
 `MachPatchBuild.json`. The JSON build record captures the selected developer directory, Xcode and
 Clang versions, iPhoneOS SDK path/version, exact compiler executable and argument array, standard
 output/error, exit status, duration, deployment target, architecture decision, capability probes,
-validated CPU subtype, and `@rpath` install name.
+validated CPU subtype, and `@rpath` install name. Its provenance section records canonical SHA-256
+digests for the host target, selected image, patch project, generated source, and final dylib. App
+and packaging workflows append the final verification outcome and check counts to that same record.
 
 `automatic` follows the project's recorded slice: ordinary arm64 stays arm64, while only a
 versioned modern arm64e target can select arm64e. Explicit modes cannot relabel an incompatible
@@ -288,6 +290,20 @@ Debian export requires a verified ordinary arm64 build and a target bundle ident
 does not guess package architecture metadata for arm64e or universal outputs. Theos and Frida
 exports are intentionally deferred; they are not required to build, inspect, or reproduce the
 native runtime patch.
+
+The same packagers are available from the CLI as a build-and-verify workflow:
+
+```bash
+.build/debug/machpatch package Examples/ExamplePatch.json \
+  --format source --output "Package Output"
+.build/debug/machpatch package Examples/ExamplePatch.json \
+  --format deb --output "Package Output"
+```
+
+Add `--target /path/to/Target.ipa` to verify deployment and slice compatibility against the exact
+recorded app image. `--arch` accepts the same modes as `build`. The command retains the generated
+source, dylib, and verification-bearing `MachPatchBuild.json` beside the requested ZIP or Debian
+package and prints their exact paths as JSON.
 
 The next implementation phases and their acceptance gates are tracked in
 [docs/implementation-roadmap.md](docs/implementation-roadmap.md).

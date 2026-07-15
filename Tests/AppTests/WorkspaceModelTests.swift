@@ -544,8 +544,24 @@ final class WorkspaceModelTests: XCTestCase {
         }
         XCTAssertEqual(artifact.record.architecture, .arm64)
         XCTAssertEqual(artifact.dylibURL.lastPathComponent, "FixturePatch.dylib")
+        XCTAssertEqual(
+            artifact.record.provenance?.verification,
+            PatchBuildVerificationRecord(
+                outcome: .readyForLiveContainerTesting,
+                passedCheckCount: 1,
+                warningCheckCount: 0,
+                failedCheckCount: 0
+            )
+        )
+        XCTAssertEqual(
+            try PatchBuildRecordCodec.decode(Data(contentsOf: artifact.recordURL)),
+            artifact.record
+        )
         XCTAssertTrue(model.canExportDylib)
         XCTAssertEqual(model.verificationState.report, verificationService.report)
+        XCTAssertEqual(model.shareableArtifact(for: .dylib)?.url, artifact.dylibURL)
+        XCTAssertNotNil(model.shareableArtifact(for: .sourceBundle))
+        XCTAssertNotNil(model.shareableArtifact(for: .debianPackage))
 
         model.exportDylib()
 
@@ -558,6 +574,7 @@ final class WorkspaceModelTests: XCTestCase {
             model.lastCompletedExport,
             CompletedWorkspaceExport(kind: .dylib, url: dylibExportURL)
         )
+        XCTAssertEqual(model.shareableArtifact(for: .dylib), model.lastCompletedExport)
 
         model.updateOutputName("ChangedPatch")
 
@@ -566,6 +583,7 @@ final class WorkspaceModelTests: XCTestCase {
         }
         XCTAssertEqual(staleArtifact, artifact)
         XCTAssertFalse(model.canExportDylib)
+        XCTAssertNil(model.shareableArtifact(for: .dylib))
         guard case .unavailable = model.verificationState else {
             return XCTFail("A project edit must invalidate the verification report")
         }
@@ -667,9 +685,11 @@ final class WorkspaceModelTests: XCTestCase {
         model.buildDylib()
         await waitForVerificationToFinish(model)
 
-        guard case .succeeded = model.buildState else {
+        guard case .succeeded(let artifact) = model.buildState else {
             return XCTFail("A blocked verification must preserve the successful build")
         }
+        XCTAssertEqual(artifact.record.provenance?.verification?.outcome, .blocked)
+        XCTAssertEqual(artifact.record.provenance?.verification?.failedCheckCount, 1)
         XCTAssertEqual(model.verificationState.report?.result, .blocked)
         XCTAssertFalse(model.canExportDylib)
 
@@ -697,6 +717,9 @@ final class WorkspaceModelTests: XCTestCase {
 
         XCTAssertTrue(model.canExportSourceBundle)
         XCTAssertTrue(model.canExportDebianPackage)
+        XCTAssertNotNil(model.shareableArtifact(for: .dylib))
+        XCTAssertNotNil(model.shareableArtifact(for: .sourceBundle))
+        XCTAssertNotNil(model.shareableArtifact(for: .debianPackage))
         XCTAssertEqual(model.defaultSourceBundleFilename, "FixturePatchSource.zip")
         XCTAssertEqual(model.defaultDebianPackageFilename, "FixturePatch.deb")
 
@@ -710,6 +733,7 @@ final class WorkspaceModelTests: XCTestCase {
             model.lastCompletedExport,
             CompletedWorkspaceExport(kind: .sourceBundle, url: sourceExportURL)
         )
+        XCTAssertEqual(model.shareableArtifact(for: .sourceBundle), model.lastCompletedExport)
 
         model.exportDebianPackage()
 
@@ -721,11 +745,15 @@ final class WorkspaceModelTests: XCTestCase {
             model.lastCompletedExport,
             CompletedWorkspaceExport(kind: .debianPackage, url: debianExportURL)
         )
+        XCTAssertEqual(model.shareableArtifact(for: .sourceBundle)?.url, sourceExportURL)
+        XCTAssertEqual(model.shareableArtifact(for: .debianPackage), model.lastCompletedExport)
 
         model.updateProjectName("Changed Project")
 
         XCTAssertFalse(model.canExportSourceBundle)
         XCTAssertFalse(model.canExportDebianPackage)
+        XCTAssertNil(model.shareableArtifact(for: .sourceBundle))
+        XCTAssertNil(model.shareableArtifact(for: .debianPackage))
         XCTAssertFalse(model.isSourceBundleExporterPresented)
         XCTAssertFalse(model.isDebianPackageExporterPresented)
         XCTAssertNil(model.sourceBundleExportDocument)
@@ -753,7 +781,14 @@ final class WorkspaceModelTests: XCTestCase {
             return XCTFail("Expected verification execution failure")
         }
         XCTAssertEqual(failure.message, StubError.failed.localizedDescription)
-        XCTAssertNotNil(model.buildState.artifact)
+        XCTAssertEqual(
+            model.buildState.artifact?.record.provenance?.verification?.outcome,
+            .failedToVerify
+        )
+        XCTAssertEqual(
+            model.buildState.artifact?.record.provenance?.verification?.message,
+            StubError.failed.localizedDescription
+        )
         XCTAssertFalse(model.canExportDylib)
     }
 
@@ -1115,6 +1150,7 @@ final class WorkspaceModelTests: XCTestCase {
             model.lastCompletedExport,
             CompletedWorkspaceExport(kind: .patchProject, url: patchExportURL)
         )
+        XCTAssertEqual(model.shareableArtifact(for: .patchProject), model.lastCompletedExport)
         model.selectImage(id: frameworkImage.id)
         XCTAssertEqual(model.pendingWorkspaceTransition, .selectImage(frameworkImage.id))
         XCTAssertFalse(model.pendingWorkspaceTransitionHasUnsavedChanges)
@@ -1666,11 +1702,6 @@ private actor CountingLoader: TargetLoading {
 private final class StubPatchBuildService: PatchBuildServicing, @unchecked Sendable {
     private let lock = NSLock()
     private var storedFailure: PatchDylibBuilderError?
-    private let artifact: PatchBuildArtifact
-
-    init() {
-        artifact = StubPatchBuildService.makeArtifact()
-    }
 
     var failure: PatchDylibBuilderError? {
         get { lock.withLock { storedFailure } }
@@ -1699,10 +1730,10 @@ private final class StubPatchBuildService: PatchBuildServicing, @unchecked Senda
                 message: "Dylib build completed."
             )
         )
-        return artifact
+        return try StubPatchBuildService.makeArtifact(project: project)
     }
 
-    private static func makeArtifact() -> PatchBuildArtifact {
+    private static func makeArtifact(project: PatchProject) throws -> PatchBuildArtifact {
         let workspace = FileManager.default.temporaryDirectory.appending(
             path: "MachPatchAppTestBuild-\(UUID().uuidString)",
             directoryHint: .isDirectory
@@ -1711,8 +1742,8 @@ private final class StubPatchBuildService: PatchBuildServicing, @unchecked Senda
             requestedMode: .automatic,
             outputArchitecture: .arm64,
             slices: [.arm64],
-            targetArchitecture: .arm64,
-            targetCPUSubtype: 0,
+            targetArchitecture: project.target.selectedSlice.architecture,
+            targetCPUSubtype: project.target.selectedSlice.cpuSubtype,
             targetArm64eABI: nil,
             reason: "Test resolution"
         )
@@ -1726,27 +1757,41 @@ private final class StubPatchBuildService: PatchBuildServicing, @unchecked Senda
             sdkPath: "/Applications/Xcode.app/iPhoneOS.sdk",
             sdkVersion: "26.0"
         )
+        let sourceURL = workspace.appending(path: "MachPatchGenerated.m")
+        let outputURL = workspace.appending(path: "\(project.build.outputName).dylib")
+        let recordURL = workspace.appending(path: "MachPatchBuild.json")
+        try FileManager.default.createDirectory(
+            at: workspace,
+            withIntermediateDirectories: true
+        )
+        try Data("test dylib".utf8).write(to: outputURL)
+        try Data("// test generated source\n".utf8).write(to: sourceURL)
         let record = PatchBuildRecord(
-            projectName: "Fixture Patch",
+            projectName: project.projectName,
             architecture: .arm64,
-            minimumIOSVersion: "15.0",
-            installName: "@rpath/FixturePatch.dylib",
-            sourcePath: workspace.appending(path: "MachPatchGenerated.m").path,
-            outputPath: workspace.appending(path: "FixturePatch.dylib").path,
-            recordPath: workspace.appending(path: "MachPatchBuild.json").path,
+            minimumIOSVersion: project.build.minimumIOSVersion,
+            installName: "@rpath/\(project.build.outputName).dylib",
+            sourcePath: sourceURL.path,
+            outputPath: outputURL.path,
+            recordPath: recordURL.path,
             toolchain: toolchain,
             architectureResolution: resolution,
             capabilityProbes: [],
             slices: [],
             symbolChecks: [],
-            merge: nil
+            merge: nil,
+            provenance: PatchBuildProvenance(
+                targetExecutableSHA256: project.target.executableSHA256,
+                selectedImageSHA256: project.target.selectedImage.executableSHA256,
+                projectSHA256: PatchBuildContentHasher.sha256(
+                    try PatchProjectCodec.encode(project)
+                ),
+                generatedSourceSHA256: try PatchBuildContentHasher.sha256(
+                    fileAt: sourceURL
+                ),
+                outputSHA256: try PatchBuildContentHasher.sha256(fileAt: outputURL)
+            )
         )
-        try? FileManager.default.createDirectory(
-            at: workspace,
-            withIntermediateDirectories: true
-        )
-        try? Data("test dylib".utf8).write(to: URL(filePath: record.outputPath))
-        try? Data("// test generated source\n".utf8).write(to: URL(filePath: record.sourcePath))
         return PatchBuildArtifact(workspaceURL: workspace, record: record)
     }
 }

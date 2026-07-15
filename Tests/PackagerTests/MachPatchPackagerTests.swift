@@ -107,6 +107,41 @@ final class MachPatchPackagerTests: XCTestCase {
         )
     }
 
+    func testPackagingRejectsArtifactsThatDoNotMatchRecordedHashes() throws {
+        let fixture = try makeFixture(architecture: .arm64)
+        defer { try? FileManager.default.removeItem(at: fixture.workspace) }
+
+        try Data("tampered source\n".utf8).write(to: fixture.sourceURL)
+        XCTAssertThrowsError(
+            try PatchSourceArchiveBuilder().build(
+                project: fixture.project,
+                buildRecord: fixture.record,
+                sourceURL: fixture.sourceURL
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? PatchPackagingError,
+                .buildRecordMismatch(
+                    "artifact content hash differs for MachPatchGenerated.m"
+                )
+            )
+        }
+
+        try Data("tampered dylib".utf8).write(to: fixture.dylibURL)
+        XCTAssertThrowsError(
+            try DebianPackageBuilder().build(
+                project: fixture.project,
+                buildRecord: fixture.record,
+                dylibURL: fixture.dylibURL
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? PatchPackagingError,
+                .buildRecordMismatch("artifact content hash differs for FixturePatch.dylib")
+            )
+        }
+    }
+
     func testDebianPackageContainsDylibFilterAndDeterministicMetadata() throws {
         let fixture = try makeFixture(architecture: .arm64)
         defer { try? FileManager.default.removeItem(at: fixture.workspace) }
@@ -213,12 +248,14 @@ final class MachPatchPackagerTests: XCTestCase {
         let sdkCheck = try run(
             "/usr/bin/xcrun", arguments: ["--sdk", "iphoneos", "--show-sdk-path"])
         guard sdkCheck.status == 0 else { throw XCTSkip("The iPhoneOS SDK is unavailable") }
-        let fixture = try makeFixture(architecture: .arm64)
+        let fixture = try makeFixture(
+            architecture: .arm64,
+            sourceContents: Data(
+                "#import <Foundation/Foundation.h>\n__attribute__((constructor)) static void MachPatchFixture(void) {}\n"
+                    .utf8
+            )
+        )
         defer { try? FileManager.default.removeItem(at: fixture.workspace) }
-        try Data(
-            "#import <Foundation/Foundation.h>\n__attribute__((constructor)) static void MachPatchFixture(void) {}\n"
-                .utf8
-        ).write(to: fixture.sourceURL)
         let bundle = try PatchSourceBundleBuilder().build(
             project: fixture.project,
             buildRecord: fixture.record,
@@ -246,7 +283,8 @@ final class MachPatchPackagerTests: XCTestCase {
 
     private func makeFixture(
         architecture: PatchBuildOutputArchitecture,
-        bundleIdentifier: String? = "com.example.fixture"
+        bundleIdentifier: String? = "com.example.fixture",
+        sourceContents: Data = Data("// generated fixture\n".utf8)
     ) throws -> PackagingFixture {
         let workspace = FileManager.default.temporaryDirectory.appending(
             path: "MachPatchPackagerTests-\(UUID().uuidString)",
@@ -255,7 +293,7 @@ final class MachPatchPackagerTests: XCTestCase {
         try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
         let sourceURL = workspace.appending(path: "MachPatchGenerated.m")
         let dylibURL = workspace.appending(path: "FixturePatch.dylib")
-        try Data("// generated fixture\n".utf8).write(to: sourceURL)
+        try sourceContents.write(to: sourceURL)
         try Data("fixture dylib".utf8).write(to: dylibURL)
         let project = PatchProject(
             projectName: "Fixture Patch",
@@ -304,7 +342,18 @@ final class MachPatchPackagerTests: XCTestCase {
             capabilityProbes: [],
             slices: [],
             symbolChecks: [],
-            merge: nil
+            merge: nil,
+            provenance: PatchBuildProvenance(
+                targetExecutableSHA256: project.target.executableSHA256,
+                selectedImageSHA256: project.target.selectedImage.executableSHA256,
+                projectSHA256: PatchBuildContentHasher.sha256(
+                    try PatchProjectCodec.encode(project)
+                ),
+                generatedSourceSHA256: try PatchBuildContentHasher.sha256(
+                    fileAt: sourceURL
+                ),
+                outputSHA256: try PatchBuildContentHasher.sha256(fileAt: dylibURL)
+            )
         )
         return PackagingFixture(
             workspace: workspace,

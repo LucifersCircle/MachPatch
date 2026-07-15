@@ -117,7 +117,7 @@ public struct AppleToolchain: Codable, Equatable, Sendable {
 }
 
 public struct PatchBuildRecord: Codable, Equatable, Sendable {
-    public static let currentFormatVersion = 2
+    public static let currentFormatVersion = 3
 
     public let formatVersion: Int
     public let projectName: String
@@ -133,6 +133,7 @@ public struct PatchBuildRecord: Codable, Equatable, Sendable {
     public let slices: [PatchBuildSliceRecord]
     public let symbolChecks: [BuildCommandExecution]
     public let merge: BuildCommandExecution?
+    public let provenance: PatchBuildProvenance?
 
     public init(
         formatVersion: Int = PatchBuildRecord.currentFormatVersion,
@@ -148,7 +149,8 @@ public struct PatchBuildRecord: Codable, Equatable, Sendable {
         capabilityProbes: [ToolchainArchitectureProbe],
         slices: [PatchBuildSliceRecord],
         symbolChecks: [BuildCommandExecution],
-        merge: BuildCommandExecution?
+        merge: BuildCommandExecution?,
+        provenance: PatchBuildProvenance? = nil
     ) {
         self.formatVersion = formatVersion
         self.projectName = projectName
@@ -164,6 +166,95 @@ public struct PatchBuildRecord: Codable, Equatable, Sendable {
         self.slices = slices
         self.symbolChecks = symbolChecks
         self.merge = merge
+        self.provenance = provenance
+    }
+
+    public func recordingVerification(
+        _ verification: PatchBuildVerificationRecord
+    ) -> PatchBuildRecord {
+        PatchBuildRecord(
+            formatVersion: formatVersion,
+            projectName: projectName,
+            architecture: architecture,
+            minimumIOSVersion: minimumIOSVersion,
+            installName: installName,
+            sourcePath: sourcePath,
+            outputPath: outputPath,
+            recordPath: recordPath,
+            toolchain: toolchain,
+            architectureResolution: architectureResolution,
+            capabilityProbes: capabilityProbes,
+            slices: slices,
+            symbolChecks: symbolChecks,
+            merge: merge,
+            provenance: provenance?.recordingVerification(verification)
+        )
+    }
+}
+
+public struct PatchBuildProvenance: Codable, Equatable, Sendable {
+    public let targetExecutableSHA256: String
+    public let selectedImageSHA256: String
+    public let projectSHA256: String
+    public let generatedSourceSHA256: String
+    public let outputSHA256: String
+    public let verification: PatchBuildVerificationRecord?
+
+    public init(
+        targetExecutableSHA256: String,
+        selectedImageSHA256: String,
+        projectSHA256: String,
+        generatedSourceSHA256: String,
+        outputSHA256: String,
+        verification: PatchBuildVerificationRecord? = nil
+    ) {
+        self.targetExecutableSHA256 = targetExecutableSHA256
+        self.selectedImageSHA256 = selectedImageSHA256
+        self.projectSHA256 = projectSHA256
+        self.generatedSourceSHA256 = generatedSourceSHA256
+        self.outputSHA256 = outputSHA256
+        self.verification = verification
+    }
+
+    public func recordingVerification(
+        _ verification: PatchBuildVerificationRecord
+    ) -> PatchBuildProvenance {
+        PatchBuildProvenance(
+            targetExecutableSHA256: targetExecutableSHA256,
+            selectedImageSHA256: selectedImageSHA256,
+            projectSHA256: projectSHA256,
+            generatedSourceSHA256: generatedSourceSHA256,
+            outputSHA256: outputSHA256,
+            verification: verification
+        )
+    }
+}
+
+public enum PatchBuildVerificationOutcome: String, Codable, Equatable, Sendable {
+    case readyForLiveContainerTesting
+    case blocked
+    case failedToVerify
+}
+
+public struct PatchBuildVerificationRecord: Codable, Equatable, Sendable {
+    public let outcome: PatchBuildVerificationOutcome
+    public let passedCheckCount: Int
+    public let warningCheckCount: Int
+    public let failedCheckCount: Int
+    public let message: String?
+
+    public init(
+        outcome: PatchBuildVerificationOutcome,
+        passedCheckCount: Int,
+        warningCheckCount: Int,
+        failedCheckCount: Int,
+        message: String? = nil
+    ) {
+        self.outcome = outcome
+        self.passedCheckCount = passedCheckCount
+        self.warningCheckCount = warningCheckCount
+        self.failedCheckCount = failedCheckCount
+        self.message = message
     }
 }
 

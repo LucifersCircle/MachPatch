@@ -12,6 +12,7 @@ struct MachPatchApplication: App {
         .windowResizability(.contentMinSize)
         .commands {
             PatchProjectFileCommands(model: model)
+            PatchBuildCommands(model: model)
         }
     }
 }

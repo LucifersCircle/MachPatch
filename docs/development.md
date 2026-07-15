@@ -127,7 +127,8 @@ Substrate, ElleKit, libhooker, or jailbreak-bootstrap path may appear.
 
 Run the same command twice to exercise clean rebuilding. `MachPatchBuild.json` must contain the
 selected developer directory, Xcode/Clang/SDK versions, exact compiler argument array, captured
-stdout/stderr, termination status, and duration. The unit suite simulates compiler failure and
+stdout/stderr, termination status, duration, canonical input/output hashes, and the final
+verification outcome when verification has run. The unit suite simulates compiler failure and
 requires diagnostics to surface while neither a stale nor partial dylib remains.
 
 ## Architecture-resolution acceptance checks
@@ -178,6 +179,10 @@ tool executions, and `result`, and a blocking report must exit nonzero.
 
 ```bash
 swift test --filter MachPatchPackagerTests
+.build/debug/machpatch package Examples/ExamplePatch.json \
+  --format source --output /tmp/MachPatch-Package-Acceptance
+.build/debug/machpatch package Examples/ExamplePatch.json \
+  --format deb --output /tmp/MachPatch-Package-Acceptance
 ```
 
 The source-bundle tests require a valid deterministic ZIP containing canonical `patch.json`,
@@ -189,3 +194,9 @@ and `data.tar`. The data archive must contain the expected dylib and bundle-spec
 MobileSubstrate filter plist. When `dpkg-deb` is installed, the suite also requires it to accept
 the generated package metadata. arm64e and universal `.deb` export remain blocked until their
 package architecture metadata is explicitly defined.
+
+The CLI command uses the same source and Debian builders as the app. It must build and verify the
+dylib before packaging, record target/project/source/output SHA-256 values plus the verification
+result in `MachPatchBuild.json`, and return nonzero rather than packaging a blocked build. Repeating
+the source command with identical inputs must produce the same ZIP digest. Pass `--target` for the
+manual device fixture to include exact target-image deployment compatibility in verification.

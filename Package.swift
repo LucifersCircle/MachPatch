@@ -29,7 +29,7 @@ let package = Package(
             name: "MachPatchCLI",
             dependencies: [
                 "MachPatchAnalyzer", "MachPatchBuilder", "MachPatchCore", "MachPatchGenerator",
-                "MachPatchVerifier",
+                "MachPatchPackager", "MachPatchVerifier",
             ]
         ),
         .target(name: "MachPatchCore"),
