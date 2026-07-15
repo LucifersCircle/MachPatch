@@ -30,11 +30,7 @@ struct BuildWorkspaceView: View {
 
     private var header: some View {
         HStack(spacing: 16) {
-            Image(systemName: "hammer.fill")
-                .font(.system(size: 30, weight: .semibold))
-                .foregroundStyle(.tint)
-                .frame(width: 54, height: 54)
-                .background(.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+            workspaceHeaderIcon
             VStack(alignment: .leading, spacing: 3) {
                 Text(model.projectDraft?.projectName ?? "Patch Project")
                     .font(.title2.weight(.semibold))
@@ -53,6 +49,19 @@ struct BuildWorkspaceView: View {
             }
         }
         .padding(20)
+    }
+
+    @ViewBuilder
+    private var workspaceHeaderIcon: some View {
+        if let iconData = model.targetIconData {
+            TargetIconView(iconData: iconData, size: 54)
+        } else {
+            Image(systemName: "hammer.fill")
+                .font(.system(size: 30, weight: .semibold))
+                .foregroundStyle(.tint)
+                .frame(width: 54, height: 54)
+                .background(.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+        }
     }
 
     private var settingsPanel: some View {
@@ -295,45 +304,52 @@ struct BuildWorkspaceView: View {
 
     private func patchRow(_ patch: MethodPatch) -> some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: patch.enabled ? "hammer.circle.fill" : "pause.circle.fill")
-                .font(.title3)
-                .foregroundStyle(patch.enabled ? Color.accentColor : .secondary)
-                .frame(width: 24)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(methodDescription(patch))
-                    .font(.body.weight(.semibold))
-                    .lineLimit(1)
-                Text(patchActionDescription(patch.action))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-            Spacer(minLength: 8)
-            VStack(alignment: .trailing, spacing: 6) {
-                Text(patch.expectedTypeEncoding)
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.tertiary)
-                    .textSelection(.enabled)
-                Button {
-                    model.updatePatch(patch.replacing(enabled: !patch.enabled))
-                } label: {
-                    Label(
-                        patch.enabled ? "Disable" : "Enable",
-                        systemImage: patch.enabled ? "pause.fill" : "play.fill"
-                    )
+            Button {
+                model.inspectPatch(patch)
+            } label: {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: patch.enabled ? "hammer.circle.fill" : "pause.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(patch.enabled ? Color.accentColor : .secondary)
+                        .frame(width: 24)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(methodDescription(patch))
+                            .font(.body.weight(.semibold))
+                            .lineLimit(1)
+                        Text(patchActionDescription(patch.action))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                    Spacer(minLength: 8)
+                    Text(patch.expectedTypeEncoding)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.tertiary)
+                        .textSelection(.enabled)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .help(
-                    patch.enabled
-                        ? "Keep this patch and its settings, but omit it from builds."
-                        : "Include this preserved patch in generated source and builds."
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Open this patch in its class and method editor.")
+
+            Button {
+                model.updatePatch(patch.replacing(enabled: !patch.enabled))
+            } label: {
+                Label(
+                    patch.enabled ? "Disable" : "Enable",
+                    systemImage: patch.enabled ? "pause.fill" : "play.fill"
                 )
             }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help(
+                patch.enabled
+                    ? "Keep this patch and its settings, but omit it from builds."
+                    : "Include this preserved patch in generated source and builds."
+            )
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .help("Patch ID \(patch.id)")
     }
 
     @ViewBuilder

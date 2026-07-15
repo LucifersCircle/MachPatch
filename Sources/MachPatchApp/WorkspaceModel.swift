@@ -13,6 +13,7 @@ final class WorkspaceModel: ObservableObject {
     @Published var isImporterPresented = false
     @Published private(set) var isDropTargeted = false
     @Published var navigation: WorkspaceNavigation? = .target
+    @Published var selectedMethodID: String?
     @Published var classSearch = ""
     @Published var classFilter: ObjectiveCClassFilter = .all
     @Published private(set) var projectDraft: PatchProjectDraft?
@@ -69,6 +70,7 @@ final class WorkspaceModel: ObservableObject {
         projectTask?.cancel()
         resetBuildState(removingArtifact: true)
         navigation = .target
+        selectedMethodID = nil
         classSearch = ""
         classFilter = .all
         replaceProjectDraft(nil)
@@ -164,6 +166,11 @@ final class WorkspaceModel: ObservableObject {
     var selectedClass: ObjectiveCClass? {
         guard case .objectiveCClass(let classID) = navigation else { return nil }
         return analysis?.metadata.classes.first { $0.id == classID }
+    }
+
+    var targetIconData: Data? {
+        guard case .loaded(let loadedTarget) = phase else { return nil }
+        return loadedTarget.iconData
     }
 
     func methodSearchMatches(for objectiveCClass: ObjectiveCClass) -> [ObjectiveCMethod] {
@@ -495,6 +502,38 @@ final class WorkspaceModel: ObservableObject {
 
     func patch(className: String, method: ObjectiveCMethod) -> MethodPatch? {
         projectDraft?.patch(className: className, method: method)
+    }
+
+    func inspectPatch(_ patch: MethodPatch) {
+        guard
+            let objectiveCClass = analysis?.metadata.classes.first(where: {
+                $0.name == patch.className
+            })
+        else {
+            workspaceAlert = WorkspaceAlert(
+                title: "Patch Target Unavailable",
+                message: "The analyzed target does not contain the class \(patch.className)."
+            )
+            return
+        }
+
+        let methods = objectiveCClass.instanceMethods + objectiveCClass.classMethods
+        guard
+            let method = methods.first(where: {
+                $0.selector == patch.selector && $0.kind == patch.methodKind
+            })
+        else {
+            let marker = patch.methodKind == .instance ? "−" : "+"
+            workspaceAlert = WorkspaceAlert(
+                title: "Patch Target Unavailable",
+                message:
+                    "The analyzed target does not contain \(marker)[\(patch.className) \(patch.selector)]."
+            )
+            return
+        }
+
+        selectedMethodID = method.id
+        navigation = .objectiveCClass(objectiveCClass.id)
     }
 
     @discardableResult

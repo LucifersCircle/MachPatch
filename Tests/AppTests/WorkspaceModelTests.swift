@@ -98,6 +98,52 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertEqual(model.selectedClass?.name, "SDKClass")
     }
 
+    func testInspectPatchNavigatesToItsClassAndMethod() async throws {
+        let target = makeLoadedTarget()
+        let analysis = makeAnalysis(for: target)
+        let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
+        let model = WorkspaceModel(loader: SuccessfulLoader(target: loadedTarget))
+
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+        let method = try XCTUnwrap(analysis.metadata.classes.first?.instanceMethods.first)
+        let patch = try model.addPatch(className: "AppController", method: method)
+        model.navigation = .build
+
+        model.inspectPatch(patch)
+
+        XCTAssertEqual(model.navigation, .objectiveCClass("class-app"))
+        XCTAssertEqual(model.selectedClass?.name, "AppController")
+        XCTAssertEqual(model.selectedMethodID, "method-app")
+        XCTAssertNil(model.workspaceAlert)
+    }
+
+    func testInspectPatchReportsMissingTargetWithoutLeavingWorkspace() async throws {
+        let target = makeLoadedTarget()
+        let analysis = makeAnalysis(for: target)
+        let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
+        let model = WorkspaceModel(loader: SuccessfulLoader(target: loadedTarget))
+
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+        model.navigation = .build
+        let missingPatch = MethodPatch(
+            id: UUID().uuidString,
+            enabled: true,
+            className: "MissingController",
+            selector: "missingMethod",
+            methodKind: .instance,
+            expectedTypeEncoding: "v16@0:8",
+            action: .callOriginal
+        )
+
+        model.inspectPatch(missingPatch)
+
+        XCTAssertEqual(model.navigation, .build)
+        XCTAssertNil(model.selectedMethodID)
+        XCTAssertEqual(model.workspaceAlert?.title, "Patch Target Unavailable")
+    }
+
     func testClassBrowserColumnsRemainWithinAvailableWidth() {
         for availableWidth: CGFloat in [560, 640, 800, 1_600] {
             let layout = ClassBrowserColumnLayout(availableWidth: availableWidth)

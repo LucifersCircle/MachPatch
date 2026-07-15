@@ -6,7 +6,6 @@ struct ClassBrowserView: View {
     @ObservedObject var model: WorkspaceModel
 
     @State private var methodSearch = ""
-    @State private var selectedMethodID: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -77,7 +76,7 @@ struct ClassBrowserView: View {
                 .textFieldStyle(.roundedBorder)
                 .padding(12)
             Divider()
-            List(selection: $selectedMethodID) {
+            List(selection: $model.selectedMethodID) {
                 methodSection("Instance Methods", methods: filteredInstanceMethods)
                 methodSection("Class Methods", methods: filteredClassMethods)
             }
@@ -129,7 +128,7 @@ struct ClassBrowserView: View {
     }
 
     private var selectedMethod: ObjectiveCMethod? {
-        guard let selectedMethodID else { return nil }
+        guard let selectedMethodID = model.selectedMethodID else { return nil }
         return (objectiveCClass.instanceMethods + objectiveCClass.classMethods).first {
             $0.id == selectedMethodID
         }
