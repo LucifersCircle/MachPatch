@@ -623,6 +623,37 @@ final class PatchProjectTests: XCTestCase {
         XCTAssertTrue(report.errors.contains { $0.code == .invalidSelector })
     }
 
+    func testBehaviorSummaryExplainsTheActionAndAdvancedEffects() {
+        let patch = makePatch(
+            action: .returnBoolean(false),
+            advanced: PatchAdvancedConfiguration(
+                argumentReplacements: [
+                    PatchArgumentReplacement(argumentIndex: 0, value: .boolean(true))
+                ],
+                beforeEffects: [
+                    .showAlert(PatchAlert(title: "Notice", message: "Called"))
+                ],
+                afterEffects: [
+                    .customObjectiveC(PatchCustomObjectiveC(source: "NSLog(@\"done\");"))
+                ],
+                conditionalReturn: PatchConditionalReturn(
+                    condition: PatchCondition(
+                        source: .invocationCount,
+                        comparison: .greaterThan,
+                        value: .unsignedInteger(2)
+                    ),
+                    replacement: .boolean(true)
+                ),
+                invocationCounter: PatchInvocationCounter(logEachInvocation: false)
+            )
+        )
+
+        XCTAssertEqual(
+            patch.behaviorSummary,
+            "Returns False · Counts invocations · Changes 1 argument · Uses a conditional return · Shows 1 alert before · Runs 1 custom snippet after"
+        )
+    }
+
     private func validate(
         action: PatchAction,
         encoding: String,

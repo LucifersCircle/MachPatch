@@ -253,7 +253,7 @@ private struct SourceRenderer {
             typedef struct {
                 __unsafe_unretained NSString *identifier;
                 __unsafe_unretained NSString *title;
-                __unsafe_unretained NSString *methodDescription;
+                __unsafe_unretained NSString *behaviorDescription;
                 BOOL *enabledStorage;
                 BOOL defaultEnabled;
                 MPPatchState *patchState;
@@ -752,14 +752,13 @@ private struct SourceRenderer {
                 [row addArrangedSubview:[self makeHeaderRowWithTitle:descriptor->title
                     accessory:toggle]];
 
-                UILabel *method = MPMakeRuntimeLabel(
+                UILabel *behavior = MPMakeRuntimeLabel(
                     [UIFont preferredFontForTextStyle:UIFontTextStyleCaption1],
                     MPSecondaryLabelColor(),
                     2
                 );
-                method.text = [NSString stringWithFormat:@"%@ · Patch / Original",
-                    descriptor->methodDescription];
-                [row addArrangedSubview:method];
+                behavior.text = descriptor->behaviorDescription;
+                [row addArrangedSubview:behavior];
 
                 UILabel *status = MPMakeRuntimeLabel(
                     [UIFont preferredFontForTextStyle:UIFontTextStyleCaption2],
@@ -1118,7 +1117,7 @@ private struct SourceRenderer {
         let fields = [
             ObjectiveCLiteral.string(context.patch.id),
             ObjectiveCLiteral.string(control.title),
-            ObjectiveCLiteral.string(context.objcDescription),
+            ObjectiveCLiteral.string(context.patch.behaviorSummary),
             "&\(context.controlEnabledName)",
             control.defaultEnabled ? "YES" : "NO",
             "&\(context.stateName)",

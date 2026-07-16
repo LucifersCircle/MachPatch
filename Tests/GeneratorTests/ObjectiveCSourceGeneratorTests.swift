@@ -211,7 +211,12 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
                 - 1,
             5
         )
-        XCTAssertTrue(source.contains("Patch / Original"))
+        XCTAssertFalse(source.contains("Patch / Original"))
+        XCTAssertTrue(source.contains("Returns False"))
+        XCTAssertTrue(source.contains("Counts invocations"))
+        XCTAssertTrue(source.contains("Calls original unchanged"))
+        XCTAssertTrue(source.contains("Runs 1 custom snippet before"))
+        XCTAssertTrue(source.contains("Changes 1 argument"))
         XCTAssertTrue(source.contains("Installed · Patch"))
         XCTAssertTrue(source.contains("Installed · Original"))
         XCTAssertFalse(source.contains("UISegmentedControl"))

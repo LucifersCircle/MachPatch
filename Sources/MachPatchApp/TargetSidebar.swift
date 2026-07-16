@@ -127,54 +127,87 @@ struct TargetSidebar: View {
     private func buildWorkspaceControl(_ projectDraft: PatchProjectDraft) -> some View {
         let isSelected = model.navigation == .build
         let selectedText = Color(nsColor: .alternateSelectedControlTextColor)
-        return Button {
-            model.navigation = .build
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "hammer.fill")
-                    .font(.title3)
-                    .foregroundStyle(isSelected ? selectedText : .accentColor)
-                    .frame(width: 24)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Build Workspace")
-                        .font(.body.weight(.semibold))
-                    Text(
-                        "\(projectDraft.patches.count) patch\(projectDraft.patches.count == 1 ? "" : "es")"
-                    )
-                    .font(.caption)
-                    .foregroundStyle(isSelected ? selectedText.opacity(0.82) : .secondary)
+        return HStack(spacing: 4) {
+            Button {
+                model.navigation = .build
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "hammer.fill")
+                        .font(.title3)
+                        .foregroundStyle(isSelected ? selectedText : .accentColor)
+                        .frame(width: 24)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Build Workspace")
+                            .font(.body.weight(.semibold))
+                        Text(
+                            "\(projectDraft.patches.count) patch\(projectDraft.patches.count == 1 ? "" : "es")"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(isSelected ? selectedText.opacity(0.82) : .secondary)
+                    }
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
-                Image(systemName: isSelected ? "checkmark" : "chevron.right")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(isSelected ? selectedText : Color.accentColor)
-                    .accessibilityHidden(true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .foregroundStyle(isSelected ? selectedText : .primary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 9)
-            .contentShape(Rectangle())
-            .background(
-                isSelected
-                    ? Color.accentColor
-                    : Color.accentColor.opacity(isBuildWorkspaceHovered ? 0.16 : 0.08),
-                in: RoundedRectangle(cornerRadius: 8)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(
-                        Color.accentColor.opacity(
-                            isSelected ? 0 : isBuildWorkspaceHovered ? 0.55 : 0.28
-                        ),
-                        lineWidth: 1
-                    )
+            .buttonStyle(.plain)
+            .help("Open the always-available build, verification, and export workspace.")
+            .accessibilityLabel("Build Workspace, \(projectDraft.patches.count) patches")
+
+            Menu {
+                PatchProjectActionMenuItems(model: model)
+            } label: {
+                ZStack {
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.001))
+                    Circle()
+                        .fill(
+                            isSelected
+                                ? selectedText.opacity(0.22) : Color.accentColor.opacity(0.16)
+                        )
+                        .frame(width: 28, height: 28)
+                    Circle()
+                        .stroke(
+                            isSelected
+                                ? selectedText.opacity(0.9) : Color.accentColor.opacity(0.8),
+                            lineWidth: 1.5
+                        )
+                        .frame(width: 28, height: 28)
+                    Image(systemName: "ellipsis")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(isSelected ? selectedText : Color.accentColor)
+                }
+                .frame(width: 34, height: 34)
+                .contentShape(Rectangle())
             }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .frame(width: 34, height: 34)
+            .help("Patch project actions")
+            .accessibilityLabel("Patch project actions")
         }
-        .buttonStyle(.plain)
+        .foregroundStyle(isSelected ? selectedText : .primary)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .contentShape(Rectangle())
+        .background(
+            isSelected
+                ? Color.accentColor
+                : Color.accentColor.opacity(isBuildWorkspaceHovered ? 0.16 : 0.08),
+            in: RoundedRectangle(cornerRadius: 8)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(
+                    Color.accentColor.opacity(
+                        isSelected ? 0 : isBuildWorkspaceHovered ? 0.55 : 0.28
+                    ),
+                    lineWidth: 1
+                )
+        }
         .padding(8)
         .onHover { isBuildWorkspaceHovered = $0 }
-        .help("Open the always-available build, verification, and export workspace.")
-        .accessibilityLabel("Build Workspace, \(projectDraft.patches.count) patches")
     }
 
     private func displayName(for loadedTarget: LoadedTarget) -> String {

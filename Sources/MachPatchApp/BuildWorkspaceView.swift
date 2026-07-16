@@ -194,7 +194,7 @@ struct BuildWorkspaceView: View {
                                         .lineLimit(1)
                                     Text(
                                         patch.enabled
-                                            ? patchActionDescription(patch)
+                                            ? patch.behaviorSummary
                                             : patch.runtimeControl == nil
                                                 ? "Disabled in project · unavailable for in-app controls"
                                                 : "Disabled in project · control preserved until re-enabled"
@@ -212,9 +212,11 @@ struct BuildWorkspaceView: View {
                             }
                             .toggleStyle(.checkbox)
                             .disabled(!patch.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
                     .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .background(
                         Color(nsColor: .controlBackgroundColor).opacity(0.35),
                         in: RoundedRectangle(cornerRadius: 8)
@@ -420,7 +422,7 @@ struct BuildWorkspaceView: View {
                         Text(methodDescription(patch))
                             .font(.body.weight(.semibold))
                             .lineLimit(1)
-                        Text(patchActionDescription(patch))
+                        Text(patch.behaviorSummary)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
@@ -548,84 +550,6 @@ struct BuildWorkspaceView: View {
     private func methodDescription(_ patch: MethodPatch) -> String {
         let marker = patch.methodKind == .instance ? "−" : "+"
         return "\(marker)[\(patch.className) \(patch.selector)]"
-    }
-
-    private func patchActionDescription(_ patch: MethodPatch) -> String {
-        let actionDescription =
-            switch patch.action {
-            case .returnBoolean(let value):
-                "Return Boolean · \(value ? "True" : "False")"
-            case .returnSignedInteger(let value):
-                "Return Signed Integer · \(value)"
-            case .returnUnsignedInteger(let value):
-                "Return Unsigned Integer · \(value)"
-            case .returnFloatingPoint(let value):
-                "Return Floating-Point Value · \(value)"
-            case .returnNil:
-                "Return Nil"
-            case .returnClassNamed(let className):
-                "Return Class · \(className)"
-            case .returnSelector(let selector):
-                "Return Selector · \(selector)"
-            case .returnString(let value):
-                "Return String · \(value.isEmpty ? "Empty string" : "“\(value)”")"
-            case .returnObject(let value):
-                "Return Object · \(objectDescription(value))"
-            case .logInvocation:
-                "Log Invocation, then call the original"
-            case .logArguments:
-                "Log Arguments, then call the original"
-            case .logOriginalReturnValue:
-                "Call Original and log its return value"
-            case .callOriginal:
-                "Call Original without changing its result"
-            case .callOriginalAndReplace(let replacement):
-                "Call Original, then replace its result with \(replacementDescription(replacement))"
-            }
-        guard let advanced = patch.advanced, !advanced.isEmpty else {
-            return actionDescription
-        }
-        var features: [String] = []
-        if advanced.invocationCounter != nil { features.append("counter") }
-        if !advanced.argumentReplacements.isEmpty {
-            features.append("\(advanced.argumentReplacements.count) argument changes")
-        }
-        if advanced.conditionalReturn != nil { features.append("condition") }
-        let alertCount = (advanced.beforeEffects + advanced.afterEffects).filter {
-            if case .showAlert = $0 { return true }
-            return false
-        }.count
-        if alertCount > 0 { features.append("\(alertCount) alerts") }
-        let customCount = (advanced.beforeEffects + advanced.afterEffects).filter {
-            if case .customObjectiveC = $0 { return true }
-            return false
-        }.count
-        if customCount > 0 { features.append("\(customCount) custom snippets") }
-        return "\(actionDescription) · Advanced: \(features.joined(separator: ", "))"
-    }
-
-    private func objectDescription(_ value: PatchObjectValue) -> String {
-        switch value {
-        case .numberBoolean(let value): "NSNumber · \(value ? "True" : "False")"
-        case .numberSignedInteger(let value): "NSNumber · \(value)"
-        case .numberUnsignedInteger(let value): "NSNumber · \(value)"
-        case .arrayOfStrings(let values): "String array · \(values.count) items"
-        case .dictionaryOfStrings(let values): "String dictionary · \(values.count) entries"
-        case .url(let value): "NSURL · \(value)"
-        }
-    }
-
-    private func replacementDescription(_ replacement: PatchReturnValue) -> String {
-        switch replacement {
-        case .boolean(let value): value ? "True" : "False"
-        case .signedInteger(let value): String(value)
-        case .unsignedInteger(let value): String(value)
-        case .floatingPoint(let value): String(value)
-        case .nilValue: "nil"
-        case .classNamed(let className): "Class \(className)"
-        case .selector(let selector): "selector \(selector)"
-        case .string(let value): value.isEmpty ? "an empty string" : "“\(value)”"
-        }
     }
 
     private var buildPanel: some View {
