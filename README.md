@@ -20,6 +20,13 @@ swift test
 .build/debug/machpatch --version
 ```
 
+Create a signed release `.app` bundle, including the production macOS icon, with:
+
+```bash
+Scripts/package-app.sh
+open dist/MachPatch.app
+```
+
 ## Resolve an input
 
 `resolve` accepts a decrypted IPA, an iOS `.app` directory, a `.framework` bundle, or a direct
