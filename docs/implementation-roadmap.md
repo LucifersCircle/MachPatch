@@ -212,8 +212,9 @@ gate follow only after these controls pass their separate device safety checks.
 
 - Keep an always-visible Build Workspace checklist where users explicitly choose which patches
   appear in the generated control menu without navigating back to each method editor.
-- Give the project an activation mode: floating button, three-finger long press, or both. Default to
-  the visible floating button so the feature remains discoverable.
+- Use the floating button as the discoverable entry point and let projects hide it at startup.
+  Always install a three-finger recovery gesture when controls are generated so the user can reveal
+  a startup-hidden button or recover it after its session hide action.
 - Give every exposed patch one unambiguous Patch/Original switch. Patch runs the complete saved
   patch configuration; Original bypasses every patch action and advanced effect for that invocation.
   Do not expose individual return values or argument replacements as runtime editors.
@@ -231,16 +232,15 @@ gate follow only after these controls pass their separate device safety checks.
   circular material button with a system hammer symbol, a half-clipped edge-resting position,
   low-opacity idle treatment, edge snapping, dragging, VoiceOver labels, and a session-only hide
   action that always recovers on relaunch. VoiceOver fallback keeps the button fully visible.
-- Present a compact scrolling material panel with ordered control rows, installation status,
-  technical method subtitles, and reset-to-defaults. Each row is authoritative; do not add a global
+- Present a compact scrolling material panel with ordered control rows, optional technical method
+  subtitles, colored Patch/Disabled status, and reset-to-defaults. Each row is authoritative; do not add a global
   bypass that can obscure an individual patch's Patch/Original selection.
   Touches outside the button and open panel pass through to the target application.
-- Implement an optional fixed three-second, three-finger long press with a non-cancelling recognizer
-  and haptic confirmation when it succeeds. It opens the panel at a safe centered position and can
-  recover a hidden button when both activation modes are enabled. Never install this recognizer
+- Implement a fixed three-second, three-finger long press with a non-cancelling recognizer
+  and haptic confirmation when it succeeds. It only recovers a session-hidden button. Never install this recognizer
   while VoiceOver is active. Observe VoiceOver status changes; if it turns on, immediately remove
   every MachPatch gesture recognizer and expose the accessible floating button for the rest of the
-  session, including for gesture-only projects. This fallback must not consume VoiceOver gestures.
+  session. This fallback must not consume VoiceOver gestures.
 - Attach one overlay to each active window scene while sharing one process-wide control registry.
   Reconcile foregrounding, disconnection, rotation, and safe-area changes without duplicating state.
 - Avoid private APIs, avoid intercepting unrelated application events, and keep all UI work on the

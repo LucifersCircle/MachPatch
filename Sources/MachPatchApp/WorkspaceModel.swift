@@ -986,14 +986,14 @@ final class WorkspaceModel: ObservableObject {
         replaceProjectDraft(projectDraft)
     }
 
-    func updateRuntimeControlActivationMode(_ activationMode: PatchRuntimeControlActivationMode) {
+    func updateRuntimeControlHideFloatingButtonAtStart(_ hidden: Bool) {
         updateProjectDraft { draft in
             let configuration =
                 draft.runtimeControls
                 ?? PatchRuntimeControlsConfiguration(id: UUID().uuidString)
             draft.runtimeControls = PatchRuntimeControlsConfiguration(
                 id: configuration.id,
-                activationMode: activationMode
+                hideFloatingButtonAtStart: hidden
             )
         }
     }

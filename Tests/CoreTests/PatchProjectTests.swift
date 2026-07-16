@@ -179,7 +179,7 @@ final class PatchProjectTests: XCTestCase {
     func testRuntimeControlsRoundTripAndValidatePatchToggles() throws {
         let runtimeControls = PatchRuntimeControlsConfiguration(
             id: "98AF657A-7E97-43B4-A22A-55A4227382FA",
-            activationMode: .both
+            hideFloatingButtonAtStart: true
         )
         let boolean = makePatch(
             id: "4F154FAA-1E35-44AA-B014-30EAE65C3F47",
@@ -209,6 +209,7 @@ final class PatchProjectTests: XCTestCase {
             runtimeControl: PatchRuntimeControlConfiguration(
                 title: "Unsigned Value",
                 defaultEnabled: false,
+                showsTargetSubtitle: false,
                 order: 2
             )
         )
@@ -234,6 +235,48 @@ final class PatchProjectTests: XCTestCase {
 
         XCTAssertTrue(PatchProjectValidator.validate(project).isValid)
         XCTAssertEqual(try PatchProjectCodec.decode(PatchProjectCodec.encode(project)), project)
+    }
+
+    func testRuntimeControlDefaultsLegacyTargetSubtitleToVisible() throws {
+        let legacy = Data(
+            #"{"title":"Feature Enabled","defaultEnabled":true,"order":0}"#.utf8
+        )
+
+        let configuration = try JSONDecoder().decode(
+            PatchRuntimeControlConfiguration.self,
+            from: legacy
+        )
+
+        XCTAssertTrue(configuration.showsTargetSubtitle)
+    }
+
+    func testRuntimeControlsDecodeLegacyActivationModesAsStartupVisibility() throws {
+        let legacyGestureOnly = Data(
+            #"{"id":"98AF657A-7E97-43B4-A22A-55A4227382FA","activationMode":"threeFingerHold"}"#
+                .utf8
+        )
+        let legacyBoth = Data(
+            #"{"id":"98AF657A-7E97-43B4-A22A-55A4227382FA","activationMode":"both"}"#.utf8
+        )
+
+        let hiddenConfiguration = try JSONDecoder().decode(
+            PatchRuntimeControlsConfiguration.self,
+            from: legacyGestureOnly
+        )
+        let visibleConfiguration = try JSONDecoder().decode(
+            PatchRuntimeControlsConfiguration.self,
+            from: legacyBoth
+        )
+        let encoded = try JSONEncoder().encode(hiddenConfiguration)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+
+        XCTAssertTrue(hiddenConfiguration.hideFloatingButtonAtStart)
+        XCTAssertFalse(visibleConfiguration.hideFloatingButtonAtStart)
+        XCTAssertEqual(object["hideFloatingButtonAtStart"] as? Bool, true)
+        XCTAssertNil(object["recoveryGestureEnabled"])
+        XCTAssertNil(object["activationMode"])
     }
 
     func testRuntimeControlsRequireValidProjectAndPatchConfiguration() {

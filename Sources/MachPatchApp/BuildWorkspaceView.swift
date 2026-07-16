@@ -154,21 +154,26 @@ struct BuildWorkspaceView: View {
     private var runtimeControlProjectSettings: some View {
         GroupBox("In-App Controls") {
             VStack(alignment: .leading, spacing: 12) {
-                Picker(
-                    "Activation",
-                    selection: Binding(
-                        get: {
-                            model.projectDraft?.runtimeControls?.activationMode ?? .floatingButton
-                        },
-                        set: { model.updateRuntimeControlActivationMode($0) }
+                if !runtimeControlledPatches.isEmpty {
+                    Toggle(
+                        "Hide Floating Button at Start",
+                        isOn: Binding(
+                            get: {
+                                model.projectDraft?.runtimeControls?.hideFloatingButtonAtStart
+                                    ?? false
+                            },
+                            set: { model.updateRuntimeControlHideFloatingButtonAtStart($0) }
+                        )
                     )
-                ) {
-                    ForEach(PatchRuntimeControlActivationMode.allCases, id: \.self) { mode in
-                        Text(mode.displayName).tag(mode)
-                    }
-                }
+                    Text(
+                        "When hidden, hold three fingers for 3 seconds to show the button. VoiceOver always shows the button and disables the recovery gesture."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
-                Divider()
+                    Divider()
+                }
 
                 HStack {
                     Text("Available Patches")
@@ -228,7 +233,7 @@ struct BuildWorkspaceView: View {
                 }
 
                 Text(
-                    "Selected patches are remembered automatically. The generated overlay becomes part of the target app UI; gesture activation is never installed while VoiceOver is active."
+                    "Selected patches are remembered automatically. The generated overlay becomes part of the target app UI."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -726,29 +731,6 @@ struct BuildWorkspaceView: View {
 
                 HStack(spacing: 8) {
                     Button {
-                        model.exportSourceBundle()
-                    } label: {
-                        Label("Export Source Bundle (.zip)…", systemImage: "doc.zipper")
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(!model.canExportSourceBundle)
-                    .help(
-                        model.canExportSourceBundle
-                            ? "Export patch.json, deterministic generated source, and an Xcode rebuild script."
-                            : "A fresh successful build is required before source export."
-                    )
-
-                    shareButton(for: .sourceBundle)
-                }
-
-                Text(
-                    "A portable archive containing the canonical patch project, generated Objective-C, target identity, and a standalone build script."
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-                HStack(spacing: 8) {
-                    Button {
                         model.exportDebianPackage()
                     } label: {
                         Label("Export .deb…", systemImage: "shippingbox")
@@ -766,6 +748,29 @@ struct BuildWorkspaceView: View {
                 Text(
                     model.debianExportUnavailableReason
                         ?? "For jailbreak package managers; the plain dylib remains the recommended LiveContainer output."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                HStack(spacing: 8) {
+                    Button {
+                        model.exportSourceBundle()
+                    } label: {
+                        Label("Export Source Bundle (.zip)…", systemImage: "doc.zipper")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!model.canExportSourceBundle)
+                    .help(
+                        model.canExportSourceBundle
+                            ? "Export patch.json, deterministic generated source, and an Xcode rebuild script."
+                            : "A fresh successful build is required before source export."
+                    )
+
+                    shareButton(for: .sourceBundle)
+                }
+
+                Text(
+                    "A portable archive containing the canonical patch project, generated Objective-C, target identity, and a standalone build script."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -976,16 +981,6 @@ struct BuildWorkspaceView: View {
             if character == "\n" { count += 1 }
         }
         return "\(lineCount) lines · \(file.contents.utf8.count) bytes"
-    }
-}
-
-private extension PatchRuntimeControlActivationMode {
-    var displayName: String {
-        switch self {
-        case .floatingButton: "Floating Button"
-        case .threeFingerHold: "Three-Finger Hold"
-        case .both: "Button and Gesture"
-        }
     }
 }
 

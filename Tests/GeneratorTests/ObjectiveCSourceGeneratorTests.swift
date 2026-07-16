@@ -168,6 +168,7 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
             runtimeControl: PatchRuntimeControlConfiguration(
                 title: "Refresh Patch",
                 defaultEnabled: false,
+                showsTargetSubtitle: false,
                 order: 3
             )
         )
@@ -190,7 +191,7 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
             makeProject(
                 runtimeControls: PatchRuntimeControlsConfiguration(
                     id: uuid(100),
-                    activationMode: .both
+                    hideFloatingButtonAtStart: true
                 ),
                 patches: [boolean, signed, unsigned, toggle, argument]
             )
@@ -212,13 +213,23 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
             5
         )
         XCTAssertFalse(source.contains("Patch / Original"))
-        XCTAssertTrue(source.contains("Returns False"))
-        XCTAssertTrue(source.contains("Counts invocations"))
-        XCTAssertTrue(source.contains("Calls original unchanged"))
-        XCTAssertTrue(source.contains("Runs 1 custom snippet before"))
-        XCTAssertTrue(source.contains("Changes 1 argument"))
-        XCTAssertTrue(source.contains("Installed · Patch"))
-        XCTAssertTrue(source.contains("Installed · Original"))
+        XCTAssertFalse(source.contains("Returns False"))
+        XCTAssertFalse(source.contains("Calls original unchanged"))
+        XCTAssertTrue(source.contains("@\"-[FixtureManager featureEnabled]\""))
+        XCTAssertTrue(
+            source.contains(
+                "@\"Refresh Patch\", @\"-[FixtureManager refresh]\", NO, &MPPatch_3_"
+            )
+        )
+        XCTAssertTrue(source.contains("target.hidden = !descriptor->showsTargetSubtitle;"))
+        XCTAssertTrue(source.contains("status.text = @\"Patched\";"))
+        XCTAssertTrue(source.contains("status.text = @\"Disabled\";"))
+        XCTAssertFalse(source.contains("Installed ·"))
+        XCTAssertTrue(
+            source.contains(
+                "Changes will take effect on the next method call. You may need to restart the app."
+            )
+        )
         XCTAssertFalse(source.contains("UISegmentedControl"))
         XCTAssertFalse(source.contains("UITextField"))
         XCTAssertTrue(source.contains("class_addMethod(targetClass, selector"))
@@ -228,15 +239,24 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
         XCTAssertTrue(source.contains("com.machpatch.runtime.v2"))
         XCTAssertFalse(source.contains("pending-validation"))
         XCTAssertTrue(source.contains("MPRuntimeControlPersistenceKey(descriptor, @\"enabled\")"))
-        XCTAssertTrue(source.contains("static const BOOL MPConfiguredShowsButton = YES;"))
-        XCTAssertTrue(source.contains("static const BOOL MPConfiguredInstallsGesture = YES;"))
+        XCTAssertTrue(
+            source.contains("static const BOOL MPConfiguredHidesButtonAtStart = YES;")
+        )
+        XCTAssertTrue(source.contains("_buttonHiddenForSession = MPConfiguredHidesButtonAtStart;"))
         XCTAssertTrue(source.contains("gesture.minimumPressDuration = 3.0;"))
-        XCTAssertTrue(source.contains("gestureRecognizer.numberOfTouches == 3"))
+        XCTAssertTrue(source.contains("gesture.numberOfTouchesRequired = 3;"))
+        XCTAssertTrue(source.contains("gesture.allowableMovement = 44.0;"))
         XCTAssertTrue(source.contains("gesture.cancelsTouchesInView = NO;"))
+        XCTAssertTrue(source.contains("if (!self.buttonHiddenForSession) { return; }"))
+        XCTAssertTrue(
+            source.contains(
+                "After hiding the button, hold three fingers for 3 seconds to show it again."
+            )
+        )
         XCTAssertTrue(source.contains("if (UIAccessibilityIsVoiceOverRunning())"))
         XCTAssertTrue(source.contains("self.buttonHiddenForSession = NO;"))
         XCTAssertTrue(source.contains("self.buttonPanGesture.enabled = !forceAccessibleButton;"))
-        XCTAssertTrue(source.contains("[window removeGestureRecognizer:self.activationGesture]"))
+        XCTAssertTrue(source.contains("[window removeGestureRecognizer:self.recoveryGesture]"))
         XCTAssertTrue(source.contains("button.alpha = 0.28;"))
         XCTAssertTrue(source.contains("CGRectGetMaxX(window.bounds)"))
 
@@ -293,7 +313,7 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
         let project = makeProject(
             runtimeControls: PatchRuntimeControlsConfiguration(
                 id: uuid(101),
-                activationMode: .both
+                hideFloatingButtonAtStart: true
             ),
             patches: [patch, argumentPatch]
         )
@@ -410,6 +430,30 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
             decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self
         )
         XCTAssertEqual(process.terminationStatus, 0, diagnostics)
+    }
+
+    func testRuntimeControlsAreOmittedWithoutAnEnabledExposedPatch() throws {
+        let disabledPatch = makePatch(
+            index: 72,
+            enabled: false,
+            runtimeControl: PatchRuntimeControlConfiguration(
+                title: "Disabled Feature",
+                order: 0
+            )
+        )
+        let source = try generate(
+            makeProject(
+                runtimeControls: PatchRuntimeControlsConfiguration(
+                    id: uuid(102),
+                    hideFloatingButtonAtStart: true
+                ),
+                patches: [disabledPatch]
+            )
+        )
+
+        XCTAssertFalse(source.contains("#import <UIKit/UIKit.h>"))
+        XCTAssertFalse(source.contains("MPRuntimeControlsOverlay"))
+        XCTAssertFalse(source.contains("recoveryGestureRecognized:"))
     }
 
     func testComplexABITiersGenerateSafeTypedSourceAndPassDeviceClang() throws {
@@ -1124,6 +1168,7 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
 
     private func makePatch(
         index: Int,
+        enabled: Bool = true,
         className: String = "FixtureManager",
         selector: String? = nil,
         methodKind: ObjectiveCMethodKind = .instance,
@@ -1134,7 +1179,7 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
     ) -> MethodPatch {
         MethodPatch(
             id: uuid(index + 1),
-            enabled: true,
+            enabled: enabled,
             className: className,
             selector: selector ?? "method\(index)",
             methodKind: methodKind,

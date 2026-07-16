@@ -98,8 +98,9 @@ release candidate and investigate meaningful regressions before tagging it.
   values, categories, and a framework image.
 - Exercise every newly supported calling convention with its compile probe and a device invocation.
 - Enable the opt-in runtime overlay, switch each exposed patch between Patch and Original, relaunch,
-  and confirm the saved state applies to future invocations. Confirm VoiceOver prevents gesture
-  activation and overlay setup failure leaves the target usable.
+  and confirm the saved state applies to future invocations. Hide the floating button and confirm
+  the three-finger recovery gesture restores it. Confirm VoiceOver prevents recovery
+  gesture installation and overlay setup failure leaves the target usable.
 - Remember that switching to Original cannot undo state that the target already cached or persisted
   during an earlier patched invocation.
 

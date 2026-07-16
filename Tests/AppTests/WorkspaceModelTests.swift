@@ -1068,9 +1068,9 @@ final class WorkspaceModelTests: XCTestCase {
         let method = try XCTUnwrap(analysis.metadata.classes.first?.instanceMethods.first)
         let patch = try model.addPatch(className: "AppController", method: method)
 
-        model.updateRuntimeControlActivationMode(.both)
+        model.updateRuntimeControlHideFloatingButtonAtStart(true)
         let namespace = try XCTUnwrap(model.projectDraft?.runtimeControls?.id)
-        XCTAssertEqual(model.projectDraft?.runtimeControls?.activationMode, .both)
+        XCTAssertEqual(model.projectDraft?.runtimeControls?.hideFloatingButtonAtStart, true)
 
         model.setRuntimeControlExposed(true, for: patch)
 
@@ -1086,12 +1086,13 @@ final class WorkspaceModelTests: XCTestCase {
         let edited = PatchRuntimeControlConfiguration(
             title: "Debug Mode",
             defaultEnabled: false,
+            showsTargetSubtitle: false,
             order: 0
         )
         model.updateRuntimeControl(for: editablePatch, configuration: edited)
 
         XCTAssertEqual(model.projectDraft?.patches.first?.runtimeControl, edited)
-        XCTAssertEqual(model.projectDraft?.runtimeControls?.activationMode, .both)
+        XCTAssertEqual(model.projectDraft?.runtimeControls?.hideFloatingButtonAtStart, true)
         let validation = try XCTUnwrap(model.projectValidationReport)
         XCTAssertTrue(validation.isValid, validation.errors.map(\.message).joined(separator: " | "))
 

@@ -253,7 +253,8 @@ private struct SourceRenderer {
             typedef struct {
                 __unsafe_unretained NSString *identifier;
                 __unsafe_unretained NSString *title;
-                __unsafe_unretained NSString *behaviorDescription;
+                __unsafe_unretained NSString *targetDescription;
+                BOOL showsTargetSubtitle;
                 BOOL *enabledStorage;
                 BOOL defaultEnabled;
                 MPPatchState *patchState;
@@ -307,14 +308,12 @@ private struct SourceRenderer {
     private var runtimeControlOverlaySource: String {
         guard let runtimeControls else { return "" }
         let classSuffix = ObjectiveCIdentifier.sanitize(runtimeControls.id)
-        let showsButton = runtimeControls.activationMode != .threeFingerHold
-        let installsGesture = runtimeControls.activationMode != .floatingButton
+        let hidesButtonAtStart = runtimeControls.hideFloatingButtonAtStart
         return """
             #define MPRuntimeControlsOverlay MPControls_\(classSuffix)_Overlay
             #define MPRuntimeControlsManager MPControls_\(classSuffix)_Manager
 
-            static const BOOL MPConfiguredShowsButton = \(showsButton ? "YES" : "NO");
-            static const BOOL MPConfiguredInstallsGesture = \(installsGesture ? "YES" : "NO");
+            static const BOOL MPConfiguredHidesButtonAtStart = \(hidesButtonAtStart ? "YES" : "NO");
             static BOOL MPVoiceOverFallbackForSession = NO;
 
             static UIColor *MPPrimaryLabelColor(void) {
@@ -416,10 +415,9 @@ private struct SourceRenderer {
             @property(nonatomic, strong) UIVisualEffectView *panel;
             @property(nonatomic, strong) UIStackView *panelStack;
             @property(nonatomic, strong) UILabel *summaryLabel;
-            @property(nonatomic, strong) UIButton *showButtonButton;
             @property(nonatomic, strong) UIPanGestureRecognizer *buttonPanGesture;
             @property(nonatomic, strong) UILongPressGestureRecognizer *buttonLongPressGesture;
-            @property(nonatomic, strong) UILongPressGestureRecognizer *activationGesture;
+            @property(nonatomic, strong) UILongPressGestureRecognizer *recoveryGesture;
             @property(nonatomic, strong) NSMutableDictionary<NSNumber *, UISwitch *> *switches;
             @property(nonatomic, strong) NSMutableDictionary<NSNumber *, UILabel *> *statusLabels;
             @property(nonatomic, assign) BOOL panelVisible;
@@ -442,6 +440,7 @@ private struct SourceRenderer {
                     _window = window;
                     _switches = [NSMutableDictionary dictionary];
                     _statusLabels = [NSMutableDictionary dictionary];
+                    _buttonHiddenForSession = MPConfiguredHidesButtonAtStart;
                     [self updateEntryPoints];
                 }
                 return self;
@@ -505,31 +504,31 @@ private struct SourceRenderer {
                 if (forceAccessibleButton) {
                     self.buttonHiddenForSession = NO;
                 }
-                BOOL shouldShowButton = MPConfiguredShowsButton || forceAccessibleButton;
-                if (shouldShowButton && self.button == nil) {
+                if (self.button == nil) {
                     self.button = [self makeButton];
                     [window addSubview:self.button];
                 }
-                self.button.hidden = !shouldShowButton || self.buttonHiddenForSession;
+                self.button.hidden = self.buttonHiddenForSession;
                 self.buttonPanGesture.enabled = !forceAccessibleButton;
                 self.buttonLongPressGesture.enabled = !forceAccessibleButton;
                 [self updateButtonAppearanceAnimated:NO];
 
-                BOOL shouldInstallGesture = MPConfiguredInstallsGesture
-                    && !forceAccessibleButton;
-                if (shouldInstallGesture && self.activationGesture == nil) {
+                BOOL shouldInstallGesture = !forceAccessibleButton;
+                if (shouldInstallGesture && self.recoveryGesture == nil) {
                     UILongPressGestureRecognizer *gesture = [[UILongPressGestureRecognizer alloc]
                         initWithTarget:self
-                        action:@selector(activationGestureRecognized:)];
+                        action:@selector(recoveryGestureRecognized:)];
                     gesture.minimumPressDuration = 3.0;
+                    gesture.numberOfTouchesRequired = 3;
+                    gesture.allowableMovement = 44.0;
                     gesture.cancelsTouchesInView = NO;
                     gesture.delaysTouchesBegan = NO;
                     gesture.delegate = self;
                     [window addGestureRecognizer:gesture];
-                    self.activationGesture = gesture;
-                } else if (!shouldInstallGesture && self.activationGesture != nil) {
-                    [window removeGestureRecognizer:self.activationGesture];
-                    self.activationGesture = nil;
+                    self.recoveryGesture = gesture;
+                } else if (!shouldInstallGesture && self.recoveryGesture != nil) {
+                    [window removeGestureRecognizer:self.recoveryGesture];
+                    self.recoveryGesture = nil;
                 }
                 [self layoutControls];
                 if (self.button != nil) { [window bringSubviewToFront:self.button]; }
@@ -700,7 +699,7 @@ private struct SourceRenderer {
                     MPSecondaryLabelColor(),
                     0
                 );
-                behaviorNote.text = @"Each switch chooses Patch or Original on the next method call. Returning to Original cannot undo state the target app already cached or saved.";
+                behaviorNote.text = @"Changes will take effect on the next method call. You may need to restart the app.";
                 [stack addArrangedSubview:behaviorNote];
 
                 for (NSUInteger index = 0; index < MPRuntimeControlCount(); index += 1) {
@@ -717,13 +716,6 @@ private struct SourceRenderer {
                     action:@selector(resetDefaults:)
                     forControlEvents:UIControlEventTouchUpInside];
                 [footer addArrangedSubview:reset];
-                UIButton *showButton = [UIButton buttonWithType:UIButtonTypeSystem];
-                [showButton setTitle:@"Show Button" forState:UIControlStateNormal];
-                [showButton addTarget:self
-                    action:@selector(showButtonAgain:)
-                    forControlEvents:UIControlEventTouchUpInside];
-                [footer addArrangedSubview:showButton];
-                self.showButtonButton = showButton;
                 [stack addArrangedSubview:footer];
 
                 panel.hidden = YES;
@@ -744,7 +736,7 @@ private struct SourceRenderer {
                 toggle.tag = (NSInteger)index;
                 toggle.accessibilityLabel = [NSString stringWithFormat:@"%@ patch",
                     descriptor->title];
-                toggle.accessibilityHint = @"Choose Patch or Original behavior.";
+                toggle.accessibilityHint = @"Turn the saved patch on or off.";
                 [toggle addTarget:self
                     action:@selector(controlSwitchChanged:)
                     forControlEvents:UIControlEventValueChanged];
@@ -752,13 +744,14 @@ private struct SourceRenderer {
                 [row addArrangedSubview:[self makeHeaderRowWithTitle:descriptor->title
                     accessory:toggle]];
 
-                UILabel *behavior = MPMakeRuntimeLabel(
+                UILabel *target = MPMakeRuntimeLabel(
                     [UIFont preferredFontForTextStyle:UIFontTextStyleCaption1],
                     MPSecondaryLabelColor(),
                     2
                 );
-                behavior.text = descriptor->behaviorDescription;
-                [row addArrangedSubview:behavior];
+                target.text = descriptor->targetDescription;
+                target.hidden = !descriptor->showsTargetSubtitle;
+                [row addArrangedSubview:target];
 
                 UILabel *status = MPMakeRuntimeLabel(
                     [UIFont preferredFontForTextStyle:UIFontTextStyleCaption2],
@@ -871,7 +864,7 @@ private struct SourceRenderer {
                 }
                 UIAlertController *menu = [UIAlertController
                     alertControllerWithTitle:@"MachPatch Controls"
-                    message:nil
+                    message:@"After hiding the button, hold three fingers for 3 seconds to show it again."
                     preferredStyle:UIAlertControllerStyleActionSheet];
                 __weak typeof(self) weakSelf = self;
                 [menu addAction:[UIAlertAction
@@ -883,7 +876,7 @@ private struct SourceRenderer {
                     }]];
                 if (!UIAccessibilityIsVoiceOverRunning()) {
                     [menu addAction:[UIAlertAction
-                        actionWithTitle:@"Hide Until Next Launch"
+                        actionWithTitle:@"Hide Floating Button"
                         style:UIAlertActionStyleDefault
                         handler:^(__unused UIAlertAction *action) {
                             weakSelf.buttonHiddenForSession = YES;
@@ -902,20 +895,23 @@ private struct SourceRenderer {
                 [self updateButtonAppearanceAnimated:YES];
             }
 
-            - (void)activationGestureRecognized:(UILongPressGestureRecognizer *)gesture {
+            - (void)recoveryGestureRecognized:(UILongPressGestureRecognizer *)gesture {
                 if (gesture.state != UIGestureRecognizerStateBegan) { return; }
+                if (!self.buttonHiddenForSession) { return; }
+                self.buttonHiddenForSession = NO;
+                [self updateEntryPoints];
                 if (@available(iOS 10.0, *)) {
                     UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc]
                         initWithStyle:UIImpactFeedbackStyleMedium];
                     [feedback impactOccurred];
                 }
-                [self togglePanel];
+                [self refreshControls];
             }
 
             - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer {
-                if (gestureRecognizer == self.activationGesture) {
+                if (gestureRecognizer == self.recoveryGesture) {
                     return !UIAccessibilityIsVoiceOverRunning()
-                        && gestureRecognizer.numberOfTouches == 3;
+                        && self.buttonHiddenForSession;
                 }
                 return YES;
             }
@@ -938,13 +934,6 @@ private struct SourceRenderer {
                 [[MPRuntimeControlsManager sharedManager] refreshAllControls];
             }
 
-            - (void)showButtonAgain:(UIButton *)sender {
-                (void)sender;
-                self.buttonHiddenForSession = NO;
-                [self updateEntryPoints];
-                [self refreshControls];
-            }
-
             - (void)refreshControls {
                 for (NSUInteger index = 0; index < MPRuntimeControlCount(); index += 1) {
                     MPRuntimeControlDescriptor *descriptor = &MPRuntimeControlDescriptors[index];
@@ -958,11 +947,16 @@ private struct SourceRenderer {
                     UILabel *status = self.statusLabels[@(index)];
                     switch (*descriptor->patchState) {
                     case MPPatchStateInstalled:
-                        status.text = enabled
-                            ? @"Installed · Patch"
-                            : @"Installed · Original";
-                        if (@available(iOS 13.0, *)) {
-                            status.textColor = UIColor.systemGreenColor;
+                        if (enabled) {
+                            status.text = @"Patched";
+                            if (@available(iOS 13.0, *)) {
+                                status.textColor = UIColor.systemGreenColor;
+                            } else {
+                                status.textColor = UIColor.greenColor;
+                            }
+                        } else {
+                            status.text = @"Disabled";
+                            status.textColor = MPErrorColor();
                         }
                         break;
                     case MPPatchStatePending:
@@ -977,16 +971,15 @@ private struct SourceRenderer {
                 }
                 self.summaryLabel.text = [NSString stringWithFormat:@"%lu runtime controls",
                     (unsigned long)MPRuntimeControlCount()];
-                self.showButtonButton.hidden = !self.buttonHiddenForSession;
             }
 
             - (void)invalidate {
                 [self.button removeFromSuperview];
                 [self.panel removeFromSuperview];
-                if (self.activationGesture != nil && self.window != nil) {
-                    [self.window removeGestureRecognizer:self.activationGesture];
+                if (self.recoveryGesture != nil && self.window != nil) {
+                    [self.window removeGestureRecognizer:self.recoveryGesture];
                 }
-                self.activationGesture = nil;
+                self.recoveryGesture = nil;
             }
 
             @end
@@ -1117,7 +1110,8 @@ private struct SourceRenderer {
         let fields = [
             ObjectiveCLiteral.string(context.patch.id),
             ObjectiveCLiteral.string(control.title),
-            ObjectiveCLiteral.string(context.patch.behaviorSummary),
+            ObjectiveCLiteral.string(context.objcDescription),
+            control.showsTargetSubtitle ? "YES" : "NO",
             "&\(context.controlEnabledName)",
             control.defaultEnabled ? "YES" : "NO",
             "&\(context.stateName)",

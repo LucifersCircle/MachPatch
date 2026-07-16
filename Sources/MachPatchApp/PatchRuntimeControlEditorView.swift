@@ -34,6 +34,21 @@ struct PatchRuntimeControlEditorView: View {
                         )
                     )
 
+                    Toggle(
+                        "Show Target Method Subtitle",
+                        isOn: Binding(
+                            get: { control.showsTargetSubtitle },
+                            set: { update(control.replacing(showsTargetSubtitle: $0)) }
+                        )
+                    )
+
+                    if control.showsTargetSubtitle {
+                        Text(methodDescription)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+
                     Label(
                         "The in-app switch chooses between running this patch and calling the original implementation unchanged.",
                         systemImage: "arrow.triangle.branch"
@@ -74,16 +89,23 @@ struct PatchRuntimeControlEditorView: View {
     private func update(_ configuration: PatchRuntimeControlConfiguration) {
         model.updateRuntimeControl(for: patch, configuration: configuration)
     }
+
+    private var methodDescription: String {
+        let marker = patch.methodKind == .instance ? "-" : "+"
+        return "\(marker)[\(patch.className) \(patch.selector)]"
+    }
 }
 
 extension PatchRuntimeControlConfiguration {
     func replacing(
         title: String? = nil,
-        defaultEnabled: Bool? = nil
+        defaultEnabled: Bool? = nil,
+        showsTargetSubtitle: Bool? = nil
     ) -> PatchRuntimeControlConfiguration {
         PatchRuntimeControlConfiguration(
             title: title ?? self.title,
             defaultEnabled: defaultEnabled ?? self.defaultEnabled,
+            showsTargetSubtitle: showsTargetSubtitle ?? self.showsTargetSubtitle,
             order: order
         )
     }
