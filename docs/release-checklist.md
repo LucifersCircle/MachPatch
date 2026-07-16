@@ -106,9 +106,14 @@ release candidate and investigate meaningful regressions before tagging it.
 
 See [livecontainer.md](livecontainer.md) for the detailed verifier and device workflow.
 
-## Public-release blockers
+## Distribution policy
 
-- Choose and add the project license.
-- Confirm and document the distribution-signing policy; notarize the app when using a Developer ID
-  identity, or clearly disclose the Gatekeeper behavior of the default ad-hoc signature.
+Official MachPatch DMGs are ad-hoc signed and are not Apple-notarized. This keeps the free,
+open-source release pipeline independent of a paid Apple Developer Program membership. Gatekeeper
+may require explicit approval in **System Settings > Privacy & Security** before first launch.
+Release notes must disclose this behavior, link to the corresponding source tag, and tell users to
+verify the published SHA-256 checksum. Never instruct users to disable Gatekeeper globally.
+
+## Remaining release gate
+
 - Rerun and record the macOS UI, performance, and device gates against the exact release commit.

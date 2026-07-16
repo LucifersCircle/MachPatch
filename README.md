@@ -1,8 +1,8 @@
 # MachPatch
 
 MachPatch is an Apple Silicon macOS tool for inspecting decrypted iOS applications and
-building self-contained Objective-C runtime patch dylibs. The project is under active
-development; the current package contains the foundational command-line and library modules.
+building self-contained Objective-C runtime patch dylibs through a native SwiftUI app and a
+scriptable command-line interface.
 
 ## Requirements
 
@@ -36,8 +36,12 @@ open dist/MachPatch-0.1.0-macOS-arm64.dmg
 
 The **Release** GitHub Actions workflow can be run manually to prove the build and retain its DMG
 as a workflow artifact. Pushing a tag matching the bundle version, such as `v0.1.0`, also creates a
-GitHub Release with the DMG and SHA-256 attached directly. The default build is ad-hoc signed; a
-Developer ID certificate and notarization are a separate distribution upgrade.
+GitHub Release with the DMG and SHA-256 attached directly.
+
+Official MachPatch packages are ad-hoc signed and are not Apple-notarized. macOS Gatekeeper may
+require explicit approval in **System Settings > Privacy & Security** before the first launch.
+Download releases only from the official repository and verify the published SHA-256 checksum.
+Do not disable Gatekeeper globally.
 
 ## Resolve an input
 
@@ -342,6 +346,18 @@ swiftlint lint --strict
 The package separates analysis, generation, building, verification, and packaging from its
 command-line frontend. See [docs/architecture.md](docs/architecture.md) for module boundaries
 and implementation constraints.
+
+## License
+
+MachPatch is free software licensed under the
+[GNU General Public License version 3 only](LICENSE). Modified versions distributed to others
+remain covered by GPLv3.
+
+The [MachPatch Generated Output Exception](GENERATED-OUTPUT-EXCEPTION) is an additional permission
+under GPLv3 section 7. It allows generated source, dylibs, packages, projects, and related outputs
+to be used and distributed under terms chosen by their creators, even when MachPatch emits code
+from its own templates. The exception grants no rights in target applications, user-provided
+inputs, or other third-party material.
 
 ## Project status
 
