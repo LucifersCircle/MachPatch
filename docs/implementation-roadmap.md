@@ -214,15 +214,12 @@ gate follow only after these controls pass their separate device safety checks.
   appear in the generated control menu without navigating back to each method editor.
 - Give the project an activation mode: floating button, three-finger long press, or both. Default to
   the visible floating button so the feature remains discoverable.
-- Start with a universal patch enable/disable toggle, then add typed boolean and integer controls.
-  Design string and grouped preset controls separately rather than inferring controls from arbitrary
-  patch payloads.
-- Give every exposed control a stable identifier, user-facing title, and default value. Always
-  restore its last runtime enabled/value state on target launch. Let users order controls in the
-  menu and namespace persisted state by target identity and patch project.
-- Allow integer input only for compatible signed- or unsigned-integer return/replacement actions.
-  Validate the configured default, optional bounds, step, and every runtime edit against the exact
-  analyzed ABI width and signedness. Never clamp, wrap, or silently coerce an invalid value.
+- Give every exposed patch one unambiguous Patch/Original switch. Patch runs the complete saved
+  patch configuration; Original bypasses every patch action and advanced effect for that invocation.
+  Do not expose individual return values or argument replacements as runtime editors.
+- Give every exposed control a stable identifier, user-facing title, and default Patch/Original
+  selection. Always restore its last runtime selection on target launch. Let users order controls
+  in the menu and namespace persisted state by target identity and patch project.
 - Keep disabled project patches out of builds. A runtime-disabled exposed patch remains installed
   but forwards the original invocation unchanged.
 
@@ -234,8 +231,9 @@ gate follow only after these controls pass their separate device safety checks.
   circular material button with a system hammer symbol, a half-clipped edge-resting position,
   low-opacity idle treatment, edge snapping, dragging, VoiceOver labels, and a session-only hide
   action that always recovers on relaunch. VoiceOver fallback keeps the button fully visible.
-- Present a compact scrolling material panel with a master bypass that preserves individual states,
-  ordered control rows, installation status, technical method subtitles, and reset-to-defaults.
+- Present a compact scrolling material panel with ordered control rows, installation status,
+  technical method subtitles, and reset-to-defaults. Each row is authoritative; do not add a global
+  bypass that can obscure an individual patch's Patch/Original selection.
   Touches outside the button and open panel pass through to the target application.
 - Implement an optional fixed three-second, three-finger long press with a non-cancelling recognizer
   and haptic confirmation when it succeeds. It opens the panel at a safe centered position and can
@@ -248,8 +246,11 @@ gate follow only after these controls pass their separate device safety checks.
 - Avoid private APIs, avoid intercepting unrelated application events, and keep all UI work on the
   main thread.
 - Make every controlled hook read state cheaply and atomically without changing the typed original
-  calling convention. Read the enabled state and any typed value once at invocation start so a
-  concurrent UI edit cannot split one invocation across two configurations.
+  calling convention. Read the enabled state once at invocation start so a concurrent UI edit
+  cannot split one invocation across two configurations.
+- When a selected class inherits the target method, add a class-local override instead of mutating
+  the superclass method. Preserve the baseline IMP across multiple generated superclass/subclass
+  patches so each control remains independent.
 
 ### Safety and acceptance
 
@@ -258,10 +259,10 @@ gate follow only after these controls pass their separate device safety checks.
 - Test launch timing, late-loaded classes, scene changes, rotations, repeated foregrounding,
   multiple windows, VoiceOver fallback, gesture conflicts, persistence, and projects with no
   exposed controls.
-- Test every supported signed and unsigned integer boundary, invalid input recovery, automatic
-  launch restoration, and concurrent edits while controlled methods are running.
 - Device-test toggles for immediate and late-loaded patches, verify that runtime-disabled patches
   call the original unchanged, and confirm the target launches when overlay setup cannot complete.
+- Make it explicit that switching to Original affects future invocations only; it cannot reverse
+  target state already cached or persisted by earlier patched invocations.
 
 ## Phase 8: stability and product polish
 
@@ -319,8 +320,6 @@ gate follow only after these controls pass their separate device safety checks.
 
 ## Deferred until evidence justifies them
 
-- Inherited-method patching. A safe implementation must add a class-local override instead of
-  replacing a superclass implementation shared by unrelated subclasses.
 - Global protocol browsing. Protocol declarations are informative but are not runtime
   implementations and therefore are not direct patch targets.
 - Arbitrary custom Objective-C source. Presets remain the safe default; a future custom-code mode

@@ -80,10 +80,9 @@ private struct PatchGenerationContext {
     var stateName: String { "\(identifier)_State" }
     var counterName: String { "\(identifier)_InvocationCounter" }
     var controlEnabledName: String { "\(identifier)_ControlEnabled" }
-    var controlValueName: String { "\(identifier)_ControlValue" }
     var advanced: PatchAdvancedConfiguration { patch.advanced ?? PatchAdvancedConfiguration() }
     var needsOriginalImplementation: Bool {
-        patch.action.callsOriginal || patch.runtimeControl != nil
+        true
     }
 
     var needsInvocationCounter: Bool {
@@ -190,13 +189,13 @@ private struct SourceRenderer {
 
     func render() -> String {
         var sections: [String] = [header]
-        if !runtimeControlState.isEmpty {
-            sections.append(runtimeControlState)
-        }
         if contexts.contains(where: \.needsAlertRuntime) {
             sections.append(alertRuntime)
         }
         sections.append(contexts.map(renderPatch).joined(separator: "\n\n"))
+        if !contexts.isEmpty {
+            sections.append(renderImplementationUnwrapper())
+        }
         if !runtimeControlRuntime.isEmpty {
             sections.append(runtimeControlRuntime)
         }
@@ -224,6 +223,10 @@ private struct SourceRenderer {
         if contexts.contains(where: \.needsCoreGraphics) {
             imports += "\n#import <CoreGraphics/CoreGraphics.h>"
         }
+        let declarations =
+            contexts.isEmpty
+            ? ""
+            : "\n\nstatic IMP MPBaselineImplementation(IMP implementation);"
         return imports + """
 
 
@@ -232,12 +235,7 @@ private struct SourceRenderer {
                 MPPatchStateInstalled = 1,
                 MPPatchStateFailed = 2,
             };
-            """
-    }
-
-    private var runtimeControlState: String {
-        guard contexts.contains(where: { $0.patch.runtimeControl != nil }) else { return "" }
-        return "static BOOL MPRuntimeControlsMasterEnabled = YES;"
+            """ + declarations
     }
 
     private var controlledContexts: [PatchGenerationContext] {
@@ -252,30 +250,12 @@ private struct SourceRenderer {
         guard let runtimeControls, !controlledContexts.isEmpty else { return "" }
         let entries = controlledContexts.map(runtimeControlDescriptorEntry).joined(separator: ",\n")
         return """
-            typedef NS_ENUM(uint8_t, MPRuntimeControlKind) {
-                MPRuntimeControlKindToggle = 0,
-                MPRuntimeControlKindBoolean = 1,
-                MPRuntimeControlKindSignedInteger = 2,
-                MPRuntimeControlKindUnsignedInteger = 3,
-            };
-
             typedef struct {
                 __unsafe_unretained NSString *identifier;
                 __unsafe_unretained NSString *title;
                 __unsafe_unretained NSString *methodDescription;
                 BOOL *enabledStorage;
                 BOOL defaultEnabled;
-                MPRuntimeControlKind kind;
-                void *valueStorage;
-                BOOL defaultBoolean;
-                int64_t defaultSigned;
-                int64_t signedMinimum;
-                int64_t signedMaximum;
-                int64_t signedStep;
-                uint64_t defaultUnsigned;
-                uint64_t unsignedMinimum;
-                uint64_t unsignedMaximum;
-                uint64_t unsignedStep;
                 MPPatchState *patchState;
             } MPRuntimeControlDescriptor;
 
@@ -292,7 +272,7 @@ private struct SourceRenderer {
                 NSString *suffix
             ) {
                 return [NSString stringWithFormat:
-                    @"com.machpatch.runtime.%@.%@.%@",
+                    @"com.machpatch.runtime.v2.%@.%@.%@",
                     \(ObjectiveCLiteral.string(runtimeControls.id)),
                     descriptor->identifier,
                     suffix];
@@ -302,7 +282,6 @@ private struct SourceRenderer {
                 NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
                 for (NSUInteger index = 0; index < MPRuntimeControlCount(); index += 1) {
                     MPRuntimeControlDescriptor *descriptor = &MPRuntimeControlDescriptors[index];
-
                     id enabled = [defaults objectForKey:
                         MPRuntimeControlPersistenceKey(descriptor, @"enabled")];
                     if ([enabled isKindOfClass:[NSNumber class]]) {
@@ -312,60 +291,12 @@ private struct SourceRenderer {
                             __ATOMIC_RELEASE
                         );
                     }
-
-                    id storedValue = [defaults objectForKey:
-                        MPRuntimeControlPersistenceKey(descriptor, @"value")];
-                    switch (descriptor->kind) {
-                    case MPRuntimeControlKindBoolean:
-                        if ([storedValue isKindOfClass:[NSNumber class]]) {
-                            __atomic_store_n(
-                                (BOOL *)descriptor->valueStorage,
-                                ((NSNumber *)storedValue).boolValue,
-                                __ATOMIC_RELEASE
-                            );
-                        }
-                        break;
-                    case MPRuntimeControlKindSignedInteger:
-                        if ([storedValue isKindOfClass:[NSString class]]) {
-                            NSScanner *scanner = [NSScanner scannerWithString:(NSString *)storedValue];
-                            long long parsed = 0;
-                            if ([scanner scanLongLong:&parsed] && scanner.isAtEnd
-                                && parsed >= descriptor->signedMinimum
-                                && parsed <= descriptor->signedMaximum) {
-                                __atomic_store_n(
-                                    (int64_t *)descriptor->valueStorage,
-                                    (int64_t)parsed,
-                                    __ATOMIC_RELEASE
-                                );
-                            }
-                        }
-                        break;
-                    case MPRuntimeControlKindUnsignedInteger:
-                        if ([storedValue isKindOfClass:[NSString class]]
-                            && ![(NSString *)storedValue hasPrefix:@"-"]) {
-                            NSScanner *scanner = [NSScanner scannerWithString:(NSString *)storedValue];
-                            unsigned long long parsed = 0;
-                            if ([scanner scanUnsignedLongLong:&parsed] && scanner.isAtEnd
-                                && parsed >= descriptor->unsignedMinimum
-                                && parsed <= descriptor->unsignedMaximum) {
-                                __atomic_store_n(
-                                    (uint64_t *)descriptor->valueStorage,
-                                    (uint64_t)parsed,
-                                    __ATOMIC_RELEASE
-                                );
-                            }
-                        }
-                        break;
-                    case MPRuntimeControlKindToggle:
-                        break;
-                    }
                 }
             }
 
             \(runtimeControlOverlaySource)
 
             static void MPInitializeRuntimeControls(void) {
-                MPLoadPersistedRuntimeControls();
                 dispatch_async(dispatch_get_main_queue(), ^{
                     [[MPRuntimeControlsManager sharedManager] start];
                 });
@@ -442,65 +373,6 @@ private struct SourceRenderer {
                 );
             }
 
-            static BOOL MPRuntimeControlBooleanValue(NSUInteger index) {
-                return __atomic_load_n(
-                    (BOOL *)MPRuntimeControlDescriptors[index].valueStorage,
-                    __ATOMIC_ACQUIRE
-                );
-            }
-
-            static void MPSetRuntimeControlBooleanValue(NSUInteger index, BOOL value) {
-                MPRuntimeControlDescriptor *descriptor = &MPRuntimeControlDescriptors[index];
-                __atomic_store_n((BOOL *)descriptor->valueStorage, value, __ATOMIC_RELEASE);
-                MPPersistRuntimeControlObject(
-                    descriptor,
-                    @"value",
-                    [NSNumber numberWithBool:value]
-                );
-            }
-
-            static int64_t MPRuntimeControlSignedValue(NSUInteger index) {
-                return __atomic_load_n(
-                    (int64_t *)MPRuntimeControlDescriptors[index].valueStorage,
-                    __ATOMIC_ACQUIRE
-                );
-            }
-
-            static BOOL MPSetRuntimeControlSignedValue(NSUInteger index, int64_t value) {
-                MPRuntimeControlDescriptor *descriptor = &MPRuntimeControlDescriptors[index];
-                if (value < descriptor->signedMinimum || value > descriptor->signedMaximum) {
-                    return NO;
-                }
-                __atomic_store_n((int64_t *)descriptor->valueStorage, value, __ATOMIC_RELEASE);
-                MPPersistRuntimeControlObject(
-                    descriptor,
-                    @"value",
-                    [NSString stringWithFormat:@"%lld", (long long)value]
-                );
-                return YES;
-            }
-
-            static uint64_t MPRuntimeControlUnsignedValue(NSUInteger index) {
-                return __atomic_load_n(
-                    (uint64_t *)MPRuntimeControlDescriptors[index].valueStorage,
-                    __ATOMIC_ACQUIRE
-                );
-            }
-
-            static BOOL MPSetRuntimeControlUnsignedValue(NSUInteger index, uint64_t value) {
-                MPRuntimeControlDescriptor *descriptor = &MPRuntimeControlDescriptors[index];
-                if (value < descriptor->unsignedMinimum || value > descriptor->unsignedMaximum) {
-                    return NO;
-                }
-                __atomic_store_n((uint64_t *)descriptor->valueStorage, value, __ATOMIC_RELEASE);
-                MPPersistRuntimeControlObject(
-                    descriptor,
-                    @"value",
-                    [NSString stringWithFormat:@"%llu", (unsigned long long)value]
-                );
-                return YES;
-            }
-
             static void MPResetRuntimeControlsToDefaults(void) {
                 NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
                 for (NSUInteger index = 0; index < MPRuntimeControlCount(); index += 1) {
@@ -510,35 +382,8 @@ private struct SourceRenderer {
                         descriptor->defaultEnabled,
                         __ATOMIC_RELEASE
                     );
-                    switch (descriptor->kind) {
-                    case MPRuntimeControlKindBoolean:
-                        __atomic_store_n(
-                            (BOOL *)descriptor->valueStorage,
-                            descriptor->defaultBoolean,
-                            __ATOMIC_RELEASE
-                        );
-                        break;
-                    case MPRuntimeControlKindSignedInteger:
-                        __atomic_store_n(
-                            (int64_t *)descriptor->valueStorage,
-                            descriptor->defaultSigned,
-                            __ATOMIC_RELEASE
-                        );
-                        break;
-                    case MPRuntimeControlKindUnsignedInteger:
-                        __atomic_store_n(
-                            (uint64_t *)descriptor->valueStorage,
-                            descriptor->defaultUnsigned,
-                            __ATOMIC_RELEASE
-                        );
-                        break;
-                    case MPRuntimeControlKindToggle:
-                        break;
-                    }
                     [defaults removeObjectForKey:
                         MPRuntimeControlPersistenceKey(descriptor, @"enabled")];
-                    [defaults removeObjectForKey:
-                        MPRuntimeControlPersistenceKey(descriptor, @"value")];
                 }
             }
 
@@ -565,24 +410,17 @@ private struct SourceRenderer {
             - (void)refreshAllControls;
             @end
 
-            @interface MPRuntimeControlsOverlay : NSObject <
-                UIGestureRecognizerDelegate,
-                UITextFieldDelegate
-            >
+            @interface MPRuntimeControlsOverlay : NSObject <UIGestureRecognizerDelegate>
             @property(nonatomic, weak) UIWindow *window;
             @property(nonatomic, strong) UIButton *button;
             @property(nonatomic, strong) UIVisualEffectView *panel;
             @property(nonatomic, strong) UIStackView *panelStack;
             @property(nonatomic, strong) UILabel *summaryLabel;
-            @property(nonatomic, strong) UISwitch *masterSwitch;
             @property(nonatomic, strong) UIButton *showButtonButton;
             @property(nonatomic, strong) UIPanGestureRecognizer *buttonPanGesture;
             @property(nonatomic, strong) UILongPressGestureRecognizer *buttonLongPressGesture;
             @property(nonatomic, strong) UILongPressGestureRecognizer *activationGesture;
             @property(nonatomic, strong) NSMutableDictionary<NSNumber *, UISwitch *> *switches;
-            @property(nonatomic, strong)
-                NSMutableDictionary<NSNumber *, UISegmentedControl *> *booleanControls;
-            @property(nonatomic, strong) NSMutableDictionary<NSNumber *, UITextField *> *integerFields;
             @property(nonatomic, strong) NSMutableDictionary<NSNumber *, UILabel *> *statusLabels;
             @property(nonatomic, assign) BOOL panelVisible;
             @property(nonatomic, assign) BOOL buttonHiddenForSession;
@@ -603,8 +441,6 @@ private struct SourceRenderer {
                 if (self != nil) {
                     _window = window;
                     _switches = [NSMutableDictionary dictionary];
-                    _booleanControls = [NSMutableDictionary dictionary];
-                    _integerFields = [NSMutableDictionary dictionary];
                     _statusLabels = [NSMutableDictionary dictionary];
                     [self updateEntryPoints];
                 }
@@ -864,21 +700,8 @@ private struct SourceRenderer {
                     MPSecondaryLabelColor(),
                     0
                 );
-                behaviorNote.text = @"Turning a patch off affects its next method call; it cannot undo state the app already cached.";
+                behaviorNote.text = @"Each switch chooses Patch or Original on the next method call. Returning to Original cannot undo state the target app already cached or saved.";
                 [stack addArrangedSubview:behaviorNote];
-
-                UISwitch *master = [[UISwitch alloc] initWithFrame:CGRectZero];
-                [master addTarget:self
-                    action:@selector(masterSwitchChanged:)
-                    forControlEvents:UIControlEventValueChanged];
-                self.masterSwitch = master;
-                UIStackView *masterRow = [self makeHeaderRowWithTitle:@"All Patches"
-                    accessory:master];
-                masterRow.layoutMargins = UIEdgeInsetsMake(10.0, 12.0, 10.0, 12.0);
-                masterRow.layoutMarginsRelativeArrangement = YES;
-                masterRow.backgroundColor = MPControlBackgroundColor();
-                masterRow.layer.cornerRadius = 12.0;
-                [stack addArrangedSubview:masterRow];
 
                 for (NSUInteger index = 0; index < MPRuntimeControlCount(); index += 1) {
                     [stack addArrangedSubview:[self makeControlRow:index]];
@@ -917,27 +740,25 @@ private struct SourceRenderer {
                 row.backgroundColor = MPControlBackgroundColor();
                 row.layer.cornerRadius = 12.0;
 
-                UIView *accessory = nil;
-                if (descriptor->kind == MPRuntimeControlKindToggle
-                    || descriptor->kind == MPRuntimeControlKindSignedInteger
-                    || descriptor->kind == MPRuntimeControlKindUnsignedInteger) {
-                    UISwitch *toggle = [[UISwitch alloc] initWithFrame:CGRectZero];
-                    toggle.tag = (NSInteger)index;
-                    [toggle addTarget:self
-                        action:@selector(controlSwitchChanged:)
-                        forControlEvents:UIControlEventValueChanged];
-                    self.switches[@(index)] = toggle;
-                    accessory = toggle;
-                }
+                UISwitch *toggle = [[UISwitch alloc] initWithFrame:CGRectZero];
+                toggle.tag = (NSInteger)index;
+                toggle.accessibilityLabel = [NSString stringWithFormat:@"%@ patch",
+                    descriptor->title];
+                toggle.accessibilityHint = @"Choose Patch or Original behavior.";
+                [toggle addTarget:self
+                    action:@selector(controlSwitchChanged:)
+                    forControlEvents:UIControlEventValueChanged];
+                self.switches[@(index)] = toggle;
                 [row addArrangedSubview:[self makeHeaderRowWithTitle:descriptor->title
-                    accessory:accessory]];
+                    accessory:toggle]];
 
                 UILabel *method = MPMakeRuntimeLabel(
                     [UIFont preferredFontForTextStyle:UIFontTextStyleCaption1],
                     MPSecondaryLabelColor(),
                     2
                 );
-                method.text = descriptor->methodDescription;
+                method.text = [NSString stringWithFormat:@"%@ · Patch / Original",
+                    descriptor->methodDescription];
                 [row addArrangedSubview:method];
 
                 UILabel *status = MPMakeRuntimeLabel(
@@ -948,59 +769,6 @@ private struct SourceRenderer {
                 self.statusLabels[@(index)] = status;
                 [row addArrangedSubview:status];
 
-                if (descriptor->kind == MPRuntimeControlKindBoolean) {
-                    UISegmentedControl *segments = [[UISegmentedControl alloc]
-                        initWithItems:@[@"Original", @"False", @"True"]];
-                    segments.tag = (NSInteger)index;
-                    [segments addTarget:self
-                        action:@selector(booleanControlChanged:)
-                        forControlEvents:UIControlEventValueChanged];
-                    self.booleanControls[@(index)] = segments;
-                    [row addArrangedSubview:segments];
-                } else if (descriptor->kind == MPRuntimeControlKindSignedInteger
-                    || descriptor->kind == MPRuntimeControlKindUnsignedInteger) {
-                    UIStackView *integerRow = [[UIStackView alloc] initWithFrame:CGRectZero];
-                    integerRow.axis = UILayoutConstraintAxisHorizontal;
-                    integerRow.alignment = UIStackViewAlignmentCenter;
-                    integerRow.distribution = UIStackViewDistributionFill;
-                    integerRow.spacing = 8.0;
-
-                    UIButton *minus = [UIButton buttonWithType:UIButtonTypeSystem];
-                    [minus setTitle:@"−" forState:UIControlStateNormal];
-                    minus.titleLabel.font = [UIFont boldSystemFontOfSize:22.0];
-                    minus.tag = (NSInteger)index;
-                    minus.accessibilityLabel = @"Decrease value";
-                    [minus addTarget:self
-                        action:@selector(decrementInteger:)
-                        forControlEvents:UIControlEventTouchUpInside];
-                    [integerRow addArrangedSubview:minus];
-
-                    UITextField *field = [[UITextField alloc] initWithFrame:CGRectZero];
-                    field.borderStyle = UITextBorderStyleRoundedRect;
-                    field.textAlignment = NSTextAlignmentCenter;
-                    field.font = [UIFont monospacedDigitSystemFontOfSize:16.0
-                        weight:UIFontWeightRegular];
-                    field.keyboardType = descriptor->kind == MPRuntimeControlKindSignedInteger
-                        ? UIKeyboardTypeNumbersAndPunctuation
-                        : UIKeyboardTypeNumberPad;
-                    field.tag = (NSInteger)index;
-                    field.delegate = self;
-                    field.accessibilityLabel = @"Patch integer value";
-                    [field.widthAnchor constraintGreaterThanOrEqualToConstant:110.0].active = YES;
-                    self.integerFields[@(index)] = field;
-                    [integerRow addArrangedSubview:field];
-
-                    UIButton *plus = [UIButton buttonWithType:UIButtonTypeSystem];
-                    [plus setTitle:@"+" forState:UIControlStateNormal];
-                    plus.titleLabel.font = [UIFont boldSystemFontOfSize:22.0];
-                    plus.tag = (NSInteger)index;
-                    plus.accessibilityLabel = @"Increase value";
-                    [plus addTarget:self
-                        action:@selector(incrementInteger:)
-                        forControlEvents:UIControlEventTouchUpInside];
-                    [integerRow addArrangedSubview:plus];
-                    [row addArrangedSubview:integerRow];
-                }
                 return row;
             }
 
@@ -1160,127 +928,14 @@ private struct SourceRenderer {
                 return YES;
             }
 
-            - (void)masterSwitchChanged:(UISwitch *)sender {
-                __atomic_store_n(
-                    &MPRuntimeControlsMasterEnabled,
-                    sender.isOn,
-                    __ATOMIC_RELEASE
-                );
-                [[MPRuntimeControlsManager sharedManager] refreshAllControls];
-            }
-
             - (void)controlSwitchChanged:(UISwitch *)sender {
                 MPSetRuntimeControlEnabled((NSUInteger)sender.tag, sender.isOn);
                 [[MPRuntimeControlsManager sharedManager] refreshAllControls];
             }
 
-            - (void)booleanControlChanged:(UISegmentedControl *)sender {
-                NSUInteger index = (NSUInteger)sender.tag;
-                if (sender.selectedSegmentIndex == 0) {
-                    MPSetRuntimeControlEnabled(index, NO);
-                } else {
-                    MPSetRuntimeControlBooleanValue(
-                        index,
-                        sender.selectedSegmentIndex == 2
-                    );
-                    MPSetRuntimeControlEnabled(index, YES);
-                }
-                [[MPRuntimeControlsManager sharedManager] refreshAllControls];
-            }
-
-            - (void)showInvalidValueFeedback:(UITextField *)field {
-                field.layer.borderColor = MPErrorColor().CGColor;
-                field.layer.borderWidth = 1.0;
-                if (@available(iOS 10.0, *)) {
-                    UINotificationFeedbackGenerator *feedback =
-                        [[UINotificationFeedbackGenerator alloc] init];
-                    [feedback notificationOccurred:UINotificationFeedbackTypeError];
-                }
-                __weak UITextField *weakField = field;
-                dispatch_after(
-                    dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)),
-                    dispatch_get_main_queue(),
-                    ^{
-                        weakField.layer.borderWidth = 0.0;
-                    }
-                );
-            }
-
-            - (BOOL)applyIntegerTextField:(UITextField *)field {
-                NSUInteger index = (NSUInteger)field.tag;
-                MPRuntimeControlDescriptor *descriptor = &MPRuntimeControlDescriptors[index];
-                NSString *text = [field.text stringByTrimmingCharactersInSet:
-                    NSCharacterSet.whitespaceAndNewlineCharacterSet];
-                if (descriptor->kind == MPRuntimeControlKindSignedInteger) {
-                    NSScanner *scanner = [NSScanner scannerWithString:text];
-                    long long value = 0;
-                    if (![scanner scanLongLong:&value] || !scanner.isAtEnd
-                        || !MPSetRuntimeControlSignedValue(index, (int64_t)value)) {
-                        return NO;
-                    }
-                } else if (descriptor->kind == MPRuntimeControlKindUnsignedInteger) {
-                    NSScanner *scanner = [NSScanner scannerWithString:text];
-                    unsigned long long value = 0;
-                    if ([text hasPrefix:@"-"] || ![scanner scanUnsignedLongLong:&value]
-                        || !scanner.isAtEnd
-                        || !MPSetRuntimeControlUnsignedValue(index, (uint64_t)value)) {
-                        return NO;
-                    }
-                } else {
-                    return NO;
-                }
-                return YES;
-            }
-
-            - (void)textFieldDidEndEditing:(UITextField *)textField {
-                if (![self applyIntegerTextField:textField]) {
-                    [self showInvalidValueFeedback:textField];
-                }
-                [[MPRuntimeControlsManager sharedManager] refreshAllControls];
-            }
-
-            - (BOOL)textFieldShouldReturn:(UITextField *)textField {
-                [textField resignFirstResponder];
-                return YES;
-            }
-
-            - (void)stepIntegerAtIndex:(NSUInteger)index increasing:(BOOL)increasing {
-                MPRuntimeControlDescriptor *descriptor = &MPRuntimeControlDescriptors[index];
-                BOOL accepted = NO;
-                if (descriptor->kind == MPRuntimeControlKindSignedInteger) {
-                    int64_t current = MPRuntimeControlSignedValue(index);
-                    int64_t next = 0;
-                    BOOL overflow = increasing
-                        ? __builtin_add_overflow(current, descriptor->signedStep, &next)
-                        : __builtin_sub_overflow(current, descriptor->signedStep, &next);
-                    accepted = !overflow && MPSetRuntimeControlSignedValue(index, next);
-                } else if (descriptor->kind == MPRuntimeControlKindUnsignedInteger) {
-                    uint64_t current = MPRuntimeControlUnsignedValue(index);
-                    uint64_t next = 0;
-                    BOOL overflow = increasing
-                        ? __builtin_add_overflow(current, descriptor->unsignedStep, &next)
-                        : __builtin_sub_overflow(current, descriptor->unsignedStep, &next);
-                    accepted = !overflow && MPSetRuntimeControlUnsignedValue(index, next);
-                }
-                if (!accepted) {
-                    UITextField *field = self.integerFields[@(index)];
-                    [self showInvalidValueFeedback:field];
-                }
-                [[MPRuntimeControlsManager sharedManager] refreshAllControls];
-            }
-
-            - (void)decrementInteger:(UIButton *)sender {
-                [self stepIntegerAtIndex:(NSUInteger)sender.tag increasing:NO];
-            }
-
-            - (void)incrementInteger:(UIButton *)sender {
-                [self stepIntegerAtIndex:(NSUInteger)sender.tag increasing:YES];
-            }
-
             - (void)resetDefaults:(UIButton *)sender {
                 (void)sender;
                 MPResetRuntimeControlsToDefaults();
-                __atomic_store_n(&MPRuntimeControlsMasterEnabled, YES, __ATOMIC_RELEASE);
                 [[MPRuntimeControlsManager sharedManager] refreshAllControls];
             }
 
@@ -1292,45 +947,21 @@ private struct SourceRenderer {
             }
 
             - (void)refreshControls {
-                BOOL masterEnabled = __atomic_load_n(
-                    &MPRuntimeControlsMasterEnabled,
-                    __ATOMIC_ACQUIRE
-                );
-                self.masterSwitch.on = masterEnabled;
-                NSUInteger activeCount = 0;
                 for (NSUInteger index = 0; index < MPRuntimeControlCount(); index += 1) {
                     MPRuntimeControlDescriptor *descriptor = &MPRuntimeControlDescriptors[index];
                     BOOL enabled = MPRuntimeControlIsEnabled(index);
-                    if (enabled) { activeCount += 1; }
                     UISwitch *toggle = self.switches[@(index)];
-                    toggle.on = enabled;
-                    toggle.enabled = *descriptor->patchState != MPPatchStateFailed;
-
-                    UISegmentedControl *segments = self.booleanControls[@(index)];
-                    if (segments != nil) {
-                        segments.selectedSegmentIndex = enabled
-                            ? (MPRuntimeControlBooleanValue(index) ? 2 : 1)
-                            : 0;
-                        segments.enabled = *descriptor->patchState != MPPatchStateFailed;
-                    }
-
-                    UITextField *field = self.integerFields[@(index)];
-                    if (field != nil && !field.isFirstResponder) {
-                        field.text = descriptor->kind == MPRuntimeControlKindSignedInteger
-                            ? [NSString stringWithFormat:@"%lld",
-                                (long long)MPRuntimeControlSignedValue(index)]
-                            : [NSString stringWithFormat:@"%llu",
-                                (unsigned long long)MPRuntimeControlUnsignedValue(index)];
-                        field.enabled = enabled
-                            && *descriptor->patchState != MPPatchStateFailed;
+                    if (toggle != nil) {
+                        toggle.on = enabled;
+                        toggle.enabled = *descriptor->patchState != MPPatchStateFailed;
                     }
 
                     UILabel *status = self.statusLabels[@(index)];
                     switch (*descriptor->patchState) {
                     case MPPatchStateInstalled:
                         status.text = enabled
-                            ? @"Installed · Patched on next call"
-                            : @"Installed · Original on next call";
+                            ? @"Installed · Patch"
+                            : @"Installed · Original";
                         if (@available(iOS 13.0, *)) {
                             status.textColor = UIColor.systemGreenColor;
                         }
@@ -1345,11 +976,8 @@ private struct SourceRenderer {
                         break;
                     }
                 }
-                self.summaryLabel.text = masterEnabled
-                    ? [NSString stringWithFormat:@"%lu of %lu active",
-                        (unsigned long)activeCount,
-                        (unsigned long)MPRuntimeControlCount()]
-                    : @"All patches temporarily bypassed";
+                self.summaryLabel.text = [NSString stringWithFormat:@"%lu runtime controls",
+                    (unsigned long)MPRuntimeControlCount()];
                 self.showButtonButton.hidden = !self.buttonHiddenForSession;
             }
 
@@ -1487,80 +1115,15 @@ private struct SourceRenderer {
         guard let control = context.patch.runtimeControl else {
             preconditionFailure("Uncontrolled patch reached runtime descriptor generation")
         }
-        let common = [
+        let fields = [
             ObjectiveCLiteral.string(context.patch.id),
             ObjectiveCLiteral.string(control.title),
             ObjectiveCLiteral.string(context.objcDescription),
             "&\(context.controlEnabledName)",
             control.defaultEnabled ? "YES" : "NO",
+            "&\(context.stateName)",
         ]
-        let valueFields: [String]
-        switch control.value {
-        case .boolean(let value):
-            valueFields = [
-                "MPRuntimeControlKindBoolean", "&\(context.controlValueName)",
-                value ? "YES" : "NO",
-                "0LL", "0LL", "0LL", "0LL",
-                "0ULL", "0ULL", "0ULL", "0ULL",
-            ]
-        case .signedInteger(let configuration):
-            let bounds = runtimeSignedBounds(context, configuration: configuration)
-            valueFields = [
-                "MPRuntimeControlKindSignedInteger", "&\(context.controlValueName)", "NO",
-                signedLiteral(configuration.defaultValue),
-                signedLiteral(bounds.lowerBound),
-                signedLiteral(bounds.upperBound),
-                signedLiteral(configuration.step),
-                "0ULL", "0ULL", "0ULL", "0ULL",
-            ]
-        case .unsignedInteger(let configuration):
-            let bounds = runtimeUnsignedBounds(context, configuration: configuration)
-            valueFields = [
-                "MPRuntimeControlKindUnsignedInteger", "&\(context.controlValueName)", "NO",
-                "0LL", "0LL", "0LL", "0LL",
-                "\(configuration.defaultValue)ULL",
-                "\(bounds.lowerBound)ULL",
-                "\(bounds.upperBound)ULL",
-                "\(configuration.step)ULL",
-            ]
-        case nil:
-            valueFields = [
-                "MPRuntimeControlKindToggle", "NULL", "NO",
-                "0LL", "0LL", "0LL", "0LL",
-                "0ULL", "0ULL", "0ULL", "0ULL",
-            ]
-        }
-        return "{ \((common + valueFields + ["&\(context.stateName)"]).joined(separator: ", ")) }"
-    }
-
-    private func runtimeSignedBounds(
-        _ context: PatchGenerationContext,
-        configuration: PatchRuntimeSignedIntegerConfiguration
-    ) -> ClosedRange<Int64> {
-        let abiBounds: ClosedRange<Int64> =
-            switch context.signature.returnType.kind {
-            case .signedChar: Int64(Int8.min)...Int64(Int8.max)
-            case .signedShort: Int64(Int16.min)...Int64(Int16.max)
-            case .signedInt: Int64(Int32.min)...Int64(Int32.max)
-            default: Int64.min...Int64.max
-            }
-        return
-            (configuration.minimumValue ?? abiBounds.lowerBound)...(configuration.maximumValue
-            ?? abiBounds.upperBound)
-    }
-
-    private func runtimeUnsignedBounds(
-        _ context: PatchGenerationContext,
-        configuration: PatchRuntimeUnsignedIntegerConfiguration
-    ) -> ClosedRange<UInt64> {
-        let abiMaximum: UInt64 =
-            switch context.signature.returnType.kind {
-            case .unsignedChar: UInt64(UInt8.max)
-            case .unsignedShort: UInt64(UInt16.max)
-            case .unsignedInt: UInt64(UInt32.max)
-            default: UInt64.max
-            }
-        return (configuration.minimumValue ?? 0)...(configuration.maximumValue ?? abiMaximum)
+        return "{ \(fields.joined(separator: ", ")) }"
     }
 
     private var alertRuntime: String {
@@ -1646,9 +1209,6 @@ private struct SourceRenderer {
             parts.append(
                 "static BOOL \(context.controlEnabledName) = \(control.defaultEnabled ? "YES" : "NO");"
             )
-            if let value = control.value {
-                parts.append(renderRuntimeControlValueState(value, context: context))
-            }
         }
         if context.needsOriginalImplementation {
             let functionArguments = (["id", "SEL"] + context.arguments.map(\.cType))
@@ -1671,23 +1231,6 @@ private struct SourceRenderer {
         parts.append(renderReplacement(context))
         parts.append(renderInstaller(context))
         return parts.joined(separator: "\n\n")
-    }
-
-    private func renderRuntimeControlValueState(
-        _ value: PatchRuntimeControlValue,
-        context: PatchGenerationContext
-    ) -> String {
-        switch value {
-        case .boolean(let defaultValue):
-            return
-                "static BOOL \(context.controlValueName) = \(defaultValue ? "YES" : "NO");"
-        case .signedInteger(let configuration):
-            return
-                "static int64_t \(context.controlValueName) = \(signedLiteral(configuration.defaultValue));"
-        case .unsignedInteger(let configuration):
-            return
-                "static uint64_t \(context.controlValueName) = \(configuration.defaultValue)ULL;"
-        }
     }
 
     private func functionHeader(_ context: PatchGenerationContext) -> String {
@@ -1741,18 +1284,15 @@ private struct SourceRenderer {
         let primary: [String]
         switch context.patch.action {
         case .returnBoolean(let value):
-            primary =
-                unusedParameterLines(context) + [
-                    "return \(runtimeBooleanExpression(context, fallback: value));"
-                ]
+            primary = unusedParameterLines(context) + ["return \(value ? "YES" : "NO");"]
         case .returnSignedInteger(let value):
             primary =
                 unusedParameterLines(context)
-                + ["return \(runtimeSignedIntegerExpression(context, fallback: value));"]
+                + ["return (\(context.returnType))\(signedLiteral(value));"]
         case .returnUnsignedInteger(let value):
             primary =
                 unusedParameterLines(context)
-                + ["return \(runtimeUnsignedIntegerExpression(context, fallback: value));"]
+                + ["return (\(context.returnType))\(value)ULL;"]
         case .returnFloatingPoint(let value):
             primary =
                 unusedParameterLines(context)
@@ -1792,32 +1332,18 @@ private struct SourceRenderer {
                 callOriginalForEffects(context)
                 + renderEffects(context.advanced.afterEffects, phase: "after-original")
                 + (context.signature.returnType.kind == .void ? [] : ["(void)originalResult;"])
-                + ["return \(runtimeReplacementExpression(replacement, context: context));"]
+                + ["return \(replacementExpression(replacement, context: context));"]
         }
         return prefix + primary
     }
 
     private func runtimeControlPrologue(_ context: PatchGenerationContext) -> [String] {
         var lines = [
-            "BOOL runtimeControlEnabled = __atomic_load_n(&MPRuntimeControlsMasterEnabled, __ATOMIC_ACQUIRE) && __atomic_load_n(&\(context.controlEnabledName), __ATOMIC_ACQUIRE);",
+            "BOOL runtimeControlEnabled = __atomic_load_n(&\(context.controlEnabledName), __ATOMIC_ACQUIRE);",
             "if (!runtimeControlEnabled) {",
         ]
         lines.append(contentsOf: callOriginalUnchanged(context).map { "    \($0)" })
         lines.append("}")
-        if let value = context.patch.runtimeControl?.value {
-            let declaration =
-                switch value {
-                case .boolean:
-                    "BOOL runtimeControlValue"
-                case .signedInteger:
-                    "int64_t runtimeControlValue"
-                case .unsignedInteger:
-                    "uint64_t runtimeControlValue"
-                }
-            lines.append(
-                "\(declaration) = __atomic_load_n(&\(context.controlValueName), __ATOMIC_ACQUIRE);"
-            )
-        }
         return lines
     }
 
@@ -1825,52 +1351,6 @@ private struct SourceRenderer {
         context.signature.returnType.kind == .void
             ? ["\(context.originalCall);", "return;"]
             : ["return \(context.originalCall);"]
-    }
-
-    private func runtimeBooleanExpression(
-        _ context: PatchGenerationContext,
-        fallback: Bool
-    ) -> String {
-        if case .boolean = context.patch.runtimeControl?.value {
-            return "runtimeControlValue"
-        }
-        return fallback ? "YES" : "NO"
-    }
-
-    private func runtimeSignedIntegerExpression(
-        _ context: PatchGenerationContext,
-        fallback: Int64
-    ) -> String {
-        if case .signedInteger = context.patch.runtimeControl?.value {
-            return "(\(context.returnType))runtimeControlValue"
-        }
-        return "(\(context.returnType))\(signedLiteral(fallback))"
-    }
-
-    private func runtimeUnsignedIntegerExpression(
-        _ context: PatchGenerationContext,
-        fallback: UInt64
-    ) -> String {
-        if case .unsignedInteger = context.patch.runtimeControl?.value {
-            return "(\(context.returnType))runtimeControlValue"
-        }
-        return "(\(context.returnType))\(fallback)ULL"
-    }
-
-    private func runtimeReplacementExpression(
-        _ replacement: PatchReturnValue,
-        context: PatchGenerationContext
-    ) -> String {
-        switch (replacement, context.patch.runtimeControl?.value) {
-        case (.boolean, .boolean):
-            return "runtimeControlValue"
-        case (.signedInteger, .signedInteger):
-            return "(\(context.returnType))runtimeControlValue"
-        case (.unsignedInteger, .unsignedInteger):
-            return "(\(context.returnType))runtimeControlValue"
-        default:
-            return replacementExpression(replacement, context: context)
-        }
     }
 
     private func unusedParameterLines(_ context: PatchGenerationContext) -> [String] {
@@ -2017,8 +1497,13 @@ private struct SourceRenderer {
         context.advanced.argumentReplacements.sorted { $0.argumentIndex < $1.argumentIndex }.map {
             replacement in
             let argument = context.arguments[replacement.argumentIndex]
+            let expression = valueExpression(
+                replacement.value,
+                target: argument.type,
+                cType: argument.cType
+            )
             return
-                "\(argument.name) = \(valueExpression(replacement.value, target: argument.type, cType: argument.cType));"
+                "\(argument.name) = \(expression);"
         }
     }
 
@@ -2219,19 +1704,28 @@ private struct SourceRenderer {
             "    return NO;",
             "}",
         ])
-        if context.needsOriginalImplementation {
-            lines.append(contentsOf: [
-                "",
-                "IMP originalImplementation = method_getImplementation(method);",
-                "if (originalImplementation == NULL) {",
-                "    \(context.stateName) = MPPatchStateFailed;",
-                "    return NO;",
-                "}",
-                "\(context.originalName) = (\(context.functionTypeName))originalImplementation;",
-            ])
-        }
         lines.append(contentsOf: [
-            "method_setImplementation(method, (IMP)\(context.replacementName));",
+            "",
+            "IMP resolvedImplementation = method_getImplementation(method);",
+            "if (resolvedImplementation == NULL) {",
+            "    \(context.stateName) = MPPatchStateFailed;",
+            "    return NO;",
+            "}",
+            "IMP replacementImplementation = (IMP)\(context.replacementName);",
+            "if (class_addMethod(targetClass, selector, replacementImplementation, encoding)) {",
+            "    \(context.originalName) = (\(context.functionTypeName))MPBaselineImplementation(resolvedImplementation);",
+            "} else {",
+            "    Method directMethod = class_getInstanceMethod(targetClass, selector);",
+            "    IMP directImplementation = directMethod == NULL",
+            "        ? NULL",
+            "        : method_getImplementation(directMethod);",
+            "    if (directImplementation == NULL) {",
+            "        \(context.stateName) = MPPatchStateFailed;",
+            "        return NO;",
+            "    }",
+            "    \(context.originalName) = (\(context.functionTypeName))MPBaselineImplementation(directImplementation);",
+            "    method_setImplementation(directMethod, replacementImplementation);",
+            "}",
             "\(context.stateName) = MPPatchStateInstalled;",
             "NSLog(@\"[MachPatch] Installed %@\", \(description));",
             "return YES;",
@@ -2240,6 +1734,27 @@ private struct SourceRenderer {
         return """
             static BOOL \(context.installName)(void) {
             \(lines.map { $0.isEmpty ? "" : "    \($0)" }.joined(separator: "\n"))
+            }
+            """
+    }
+
+    private func renderImplementationUnwrapper() -> String {
+        let mappings = contexts.map { context in
+            """
+            if (implementation == (IMP)\(context.replacementName)
+                && \(context.originalName) != NULL) {
+                implementation = (IMP)\(context.originalName);
+            }
+            """
+        }.joined(separator: "\n")
+        return """
+            static IMP MPBaselineImplementation(IMP implementation) {
+                for (NSUInteger pass = 0; pass < \(contexts.count); pass += 1) {
+                    IMP previous = implementation;
+            \(indent(mappings, spaces: 8))
+                    if (implementation == previous) { break; }
+                }
+                return implementation;
             }
             """
     }
@@ -2294,13 +1809,18 @@ private struct SourceRenderer {
             "__attribute__((constructor))",
             "static void MachPatchInitialize(void) {",
             "    @autoreleasepool {",
+        ]
+        if contexts.contains(where: { $0.patch.runtimeControl != nil }) {
+            lines.append("        MPLoadPersistedRuntimeControls();")
+        }
+        lines.append(contentsOf: [
             "        NSLog(@\"[MachPatch] Patch dylib loaded\");",
             "        if (MPInstallPendingPatches() > 0) {",
             "            MPScheduleRetry(1.0, NO);",
             "            MPScheduleRetry(3.0, NO);",
             "            MPScheduleRetry(8.0, YES);",
             "        }",
-        ]
+        ])
         if contexts.contains(where: { $0.patch.runtimeControl != nil }) {
             lines.append("        MPInitializeRuntimeControls();")
         }

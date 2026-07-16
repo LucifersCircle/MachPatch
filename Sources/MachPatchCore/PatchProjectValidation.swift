@@ -302,15 +302,6 @@ public enum PatchProjectValidator {
                     )
                 )
             }
-            if let value = runtimeControl.value,
-                let message = PatchRuntimeControlCompatibility.incompatibility(
-                    value: value,
-                    action: patch.action,
-                    signature: signature
-                )
-            {
-                errors.append(issue(.incompatibleRuntimeControl, message, patchID: patch.id))
-            }
         }
         return errors
     }

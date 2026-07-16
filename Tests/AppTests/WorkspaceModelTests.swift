@@ -921,15 +921,13 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertEqual(exposedPatch.runtimeControl?.title, "featureEnabled")
         XCTAssertEqual(exposedPatch.runtimeControl?.defaultEnabled, true)
         XCTAssertEqual(exposedPatch.runtimeControl?.order, 0)
-        XCTAssertNil(exposedPatch.runtimeControl?.value)
 
         let editablePatch = exposedPatch.replacing(action: .returnBoolean(true))
         model.updatePatch(editablePatch)
         let edited = PatchRuntimeControlConfiguration(
             title: "Debug Mode",
             defaultEnabled: false,
-            order: 0,
-            value: .boolean(true)
+            order: 0
         )
         model.updateRuntimeControl(for: editablePatch, configuration: edited)
 

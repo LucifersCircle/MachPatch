@@ -1,3 +1,4 @@
+import AppKit
 import MachPatchBuilder
 import MachPatchCore
 import MachPatchGenerator
@@ -201,6 +202,12 @@ struct BuildWorkspaceView: View {
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(2)
+                                    if patch.runtimeControl != nil {
+                                        Text("In app · Patch or Original")
+                                            .font(.caption2.weight(.medium))
+                                            .foregroundStyle(.tint)
+                                            .lineLimit(1)
+                                    }
                                 }
                             }
                             .toggleStyle(.checkbox)
@@ -492,16 +499,8 @@ struct BuildWorkspaceView: View {
                     .padding(.horizontal, 16)
                     .frame(height: 40)
                     Divider()
-                    ScrollView([.horizontal, .vertical]) {
-                        Text(sourceFile.contents)
-                            .font(.system(.body, design: .monospaced))
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: true, vertical: true)
-                            .padding(16)
-                    }
-                    .defaultScrollAnchor(.topLeading)
-                    .id(sourceFile.contents.hashValue)
-                    .background(Color(nsColor: .textBackgroundColor).opacity(0.35))
+                    GeneratedSourceTextView(source: sourceFile.contents)
+                        .background(Color(nsColor: .textBackgroundColor).opacity(0.35))
                 }
             }
         }
@@ -1051,6 +1050,71 @@ private extension PatchRuntimeControlActivationMode {
         case .floatingButton: "Floating Button"
         case .threeFingerHold: "Three-Finger Hold"
         case .both: "Button and Gesture"
+        }
+    }
+}
+
+private struct GeneratedSourceTextView: NSViewRepresentable {
+    let source: String
+
+    final class Coordinator {
+        var displayedSource = ""
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = true
+        scrollView.autohidesScrollers = true
+
+        let textView = NSTextView(frame: .zero)
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isRichText = false
+        textView.drawsBackground = false
+        textView.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        textView.textContainerInset = NSSize(width: 16, height: 16)
+        textView.isHorizontallyResizable = true
+        textView.isVerticallyResizable = true
+        textView.minSize = .zero
+        textView.maxSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.textContainer?.widthTracksTextView = false
+        textView.textContainer?.containerSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.string = source
+        context.coordinator.displayedSource = source
+        scrollView.documentView = textView
+        scrollToBeginning(scrollView)
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard context.coordinator.displayedSource != source,
+            let textView = scrollView.documentView as? NSTextView
+        else { return }
+        context.coordinator.displayedSource = source
+        textView.string = source
+        scrollToBeginning(scrollView)
+    }
+
+    private func scrollToBeginning(_ scrollView: NSScrollView) {
+        DispatchQueue.main.async {
+            scrollView.contentView.scroll(to: .zero)
+            scrollView.reflectScrolledClipView(scrollView.contentView)
         }
     }
 }

@@ -59,7 +59,7 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
         XCTAssertTrue(source.contains("MPScheduleRetry(8.0, YES);"))
         XCTAssertTrue(source.contains("__attribute__((constructor))"))
 
-        XCTAssertFalse(source.contains("MPPatch_0_FixtureManager_featureEnabled_Original"))
+        XCTAssertTrue(source.contains("MPPatch_0_FixtureManager_featureEnabled_Original"))
         XCTAssertTrue(source.contains("MPPatch_8_FixtureManager_reset_Original"))
     }
 
@@ -119,7 +119,7 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
         XCTAssertTrue(first.contains("NSLog(@\"after = %d\", (int)originalResult);"))
     }
 
-    func testGeneratesAtomicRuntimeControlBypassAndTypedValues() throws {
+    func testGeneratesAtomicRuntimeControlPatchOrOriginalToggles() throws {
         let boolean = makePatch(
             index: 60,
             selector: "featureEnabled",
@@ -133,8 +133,7 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
             runtimeControl: PatchRuntimeControlConfiguration(
                 title: "Feature Enabled",
                 defaultEnabled: false,
-                order: 0,
-                value: .boolean(true)
+                order: 0
             )
         )
         let signed = makePatch(
@@ -144,10 +143,7 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
             action: .returnSignedInteger(1),
             runtimeControl: PatchRuntimeControlConfiguration(
                 title: "Signed Value",
-                order: 1,
-                value: .signedInteger(
-                    PatchRuntimeSignedIntegerConfiguration(defaultValue: -7)
-                )
+                order: 1
             )
         )
         let unsigned = makePatch(
@@ -157,10 +153,37 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
             action: .callOriginalAndReplace(.unsignedInteger(1)),
             runtimeControl: PatchRuntimeControlConfiguration(
                 title: "Unsigned Value",
-                order: 2,
-                value: .unsignedInteger(
-                    PatchRuntimeUnsignedIntegerConfiguration(defaultValue: 9)
-                )
+                order: 2
+            )
+        )
+        let toggle = makePatch(
+            index: 63,
+            selector: "refresh",
+            action: .callOriginal,
+            advanced: PatchAdvancedConfiguration(
+                beforeEffects: [
+                    .customObjectiveC(PatchCustomObjectiveC(source: "NSLog(@\"toggle-only\");"))
+                ]
+            ),
+            runtimeControl: PatchRuntimeControlConfiguration(
+                title: "Refresh Patch",
+                defaultEnabled: false,
+                order: 3
+            )
+        )
+        let argument = makePatch(
+            index: 64,
+            selector: "setFeatureEnabled:",
+            encoding: "v@:B",
+            action: .callOriginal,
+            advanced: PatchAdvancedConfiguration(
+                argumentReplacements: [
+                    PatchArgumentReplacement(argumentIndex: 0, value: .boolean(true))
+                ]
+            ),
+            runtimeControl: PatchRuntimeControlConfiguration(
+                title: "Feature Argument",
+                order: 4
             )
         )
         let source = try generate(
@@ -169,41 +192,36 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
                     id: uuid(100),
                     activationMode: .both
                 ),
-                patches: [boolean, signed, unsigned]
+                patches: [boolean, signed, unsigned, toggle, argument]
             )
         )
 
         XCTAssertTrue(source.contains("#import <UIKit/UIKit.h>"))
-        XCTAssertTrue(source.contains("static BOOL MPRuntimeControlsMasterEnabled = YES;"))
+        XCTAssertFalse(source.contains("MPRuntimeControlsMasterEnabled"))
+        XCTAssertFalse(source.contains("All Patches"))
         XCTAssertTrue(
             source.contains(
                 "static BOOL MPPatch_0_FixtureManager_featureEnabled_ControlEnabled = NO;")
         )
-        XCTAssertTrue(
-            source.contains(
-                "static BOOL MPPatch_0_FixtureManager_featureEnabled_ControlValue = YES;")
-        )
-        XCTAssertTrue(
-            source.contains(
-                "static int64_t MPPatch_1_FixtureManager_signedValue_ControlValue = -7LL;")
-        )
-        XCTAssertTrue(
-            source.contains(
-                "static uint64_t MPPatch_2_FixtureManager_unsignedValue_ControlValue = 9ULL;")
-        )
-        XCTAssertTrue(
-            source.contains(
-                "BOOL runtimeControlEnabled = __atomic_load_n(&MPRuntimeControlsMasterEnabled"
-            )
-        )
+        XCTAssertFalse(source.contains("_ControlValue"))
+        XCTAssertTrue(source.contains("BOOL runtimeControlEnabled = __atomic_load_n"))
         XCTAssertTrue(source.contains("if (!runtimeControlEnabled)"))
-        XCTAssertTrue(source.contains("return MPPatch_0_FixtureManager_featureEnabled_Original"))
-        XCTAssertTrue(source.contains("BOOL runtimeControlValue = __atomic_load_n"))
-        XCTAssertTrue(source.contains("return runtimeControlValue;"))
-        XCTAssertTrue(source.contains("return (signed char)runtimeControlValue;"))
-        XCTAssertTrue(source.contains("return (unsigned char)runtimeControlValue;"))
+        XCTAssertEqual(
+            source.components(separatedBy: "BOOL runtimeControlEnabled = __atomic_load_n").count
+                - 1,
+            5
+        )
+        XCTAssertTrue(source.contains("Patch / Original"))
+        XCTAssertTrue(source.contains("Installed · Patch"))
+        XCTAssertTrue(source.contains("Installed · Original"))
+        XCTAssertFalse(source.contains("UISegmentedControl"))
+        XCTAssertFalse(source.contains("UITextField"))
+        XCTAssertTrue(source.contains("class_addMethod(targetClass, selector"))
+        XCTAssertTrue(source.contains("MPBaselineImplementation"))
         XCTAssertFalse(source.contains("BOOL persistent;"))
         XCTAssertTrue(source.contains("MPLoadPersistedRuntimeControls();"))
+        XCTAssertTrue(source.contains("com.machpatch.runtime.v2"))
+        XCTAssertFalse(source.contains("pending-validation"))
         XCTAssertTrue(source.contains("MPRuntimeControlPersistenceKey(descriptor, @\"enabled\")"))
         XCTAssertTrue(source.contains("static const BOOL MPConfiguredShowsButton = YES;"))
         XCTAssertTrue(source.contains("static const BOOL MPConfiguredInstallsGesture = YES;"))
@@ -217,11 +235,26 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
         XCTAssertTrue(source.contains("button.alpha = 0.28;"))
         XCTAssertTrue(source.contains("CGRectGetMaxX(window.bounds)"))
 
-        let bypass = try XCTUnwrap(source.range(of: "if (!runtimeControlEnabled)"))
         let counter = try XCTUnwrap(source.range(of: "__atomic_add_fetch"))
         let effect = try XCTUnwrap(source.range(of: "NSLog(@\"patched\")"))
+        let bypass = try XCTUnwrap(source.range(of: "if (!runtimeControlEnabled)"))
+        let toggleEffect = try XCTUnwrap(source.range(of: "NSLog(@\"toggle-only\")"))
+        let restoredState = try XCTUnwrap(
+            source.range(
+                of: "MPLoadPersistedRuntimeControls();",
+                options: .backwards
+            )
+        )
+        let initialInstallation = try XCTUnwrap(
+            source.range(
+                of: "if (MPInstallPendingPatches() > 0)",
+                options: .backwards
+            )
+        )
+        XCTAssertLessThan(bypass.lowerBound, toggleEffect.lowerBound)
         XCTAssertLessThan(bypass.lowerBound, counter.lowerBound)
         XCTAssertLessThan(bypass.lowerBound, effect.lowerBound)
+        XCTAssertLessThan(restoredState.lowerBound, initialInstallation.lowerBound)
     }
 
     func testRuntimeControlsSourceLinksDeviceDylibWithWarningsAsErrors() throws {
@@ -234,8 +267,22 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
             action: .returnBoolean(true),
             runtimeControl: PatchRuntimeControlConfiguration(
                 title: "Feature Enabled",
-                order: 0,
-                value: .boolean(false)
+                order: 0
+            )
+        )
+        let argumentPatch = makePatch(
+            index: 71,
+            selector: "setFeatureEnabled:",
+            encoding: "v@:B",
+            action: .callOriginal,
+            advanced: PatchAdvancedConfiguration(
+                argumentReplacements: [
+                    PatchArgumentReplacement(argumentIndex: 0, value: .boolean(true))
+                ]
+            ),
+            runtimeControl: PatchRuntimeControlConfiguration(
+                title: "Feature Argument",
+                order: 1
             )
         )
         let project = makeProject(
@@ -243,7 +290,7 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
                 id: uuid(101),
                 activationMode: .both
             ),
-            patches: [patch]
+            patches: [patch, argumentPatch]
         )
         let workspace = FileManager.default.temporaryDirectory.appending(
             path: "MachPatch-RuntimeControlsCompile-\(UUID().uuidString)",
@@ -742,6 +789,106 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
             as: UTF8.self
         )
         XCTAssertEqual(process.terminationStatus, 0, diagnostics)
+    }
+
+    func testInheritedGetterSetterPatchesPreserveBaselineWithoutRecursion() throws {
+        let project = makeProject(patches: [
+            makePatch(
+                index: 90,
+                className: "MPFixtureChild",
+                selector: "setVipLocked:",
+                encoding: "v20@0:8B16",
+                action: .callOriginal,
+                advanced: PatchAdvancedConfiguration(
+                    argumentReplacements: [
+                        PatchArgumentReplacement(argumentIndex: 0, value: .boolean(false))
+                    ]
+                )
+            ),
+            makePatch(
+                index: 91,
+                className: "MPFixtureBase",
+                selector: "isVipLocked",
+                encoding: "B16@0:8",
+                action: .returnBoolean(false)
+            ),
+            makePatch(
+                index: 92,
+                className: "MPFixtureBase",
+                selector: "setVipLocked:",
+                encoding: "v20@0:8B16",
+                action: .callOriginal,
+                advanced: PatchAdvancedConfiguration(
+                    argumentReplacements: [
+                        PatchArgumentReplacement(argumentIndex: 0, value: .boolean(false))
+                    ]
+                )
+            ),
+        ])
+        let harness = """
+
+            @interface MPFixtureBase : NSObject {
+                BOOL _vipLocked;
+            }
+            - (BOOL)isVipLocked;
+            - (void)setVipLocked:(BOOL)value;
+            @end
+
+            @implementation MPFixtureBase
+            - (BOOL)isVipLocked { return _vipLocked; }
+            - (void)setVipLocked:(BOOL)value { _vipLocked = value; }
+            @end
+
+            @interface MPFixtureChild : MPFixtureBase
+            @end
+
+            @implementation MPFixtureChild
+            @end
+
+            int main(void) {
+                @autoreleasepool {
+                    MPFixtureBase *base = [MPFixtureBase new];
+                    MPFixtureChild *child = [MPFixtureChild new];
+                    [base setVipLocked:YES];
+                    [child setVipLocked:YES];
+                    return !base.isVipLocked && !child.isVipLocked ? 0 : 1;
+                }
+            }
+            """
+        let workspace = FileManager.default.temporaryDirectory.appending(
+            path: "MachPatch-InheritedRuntime-\(UUID().uuidString)",
+            directoryHint: .isDirectory
+        )
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        let sourceURL = workspace.appending(path: "InheritedRuntime.m")
+        let executableURL = workspace.appending(path: "InheritedRuntime")
+        try (generate(project) + harness).write(to: sourceURL, atomically: true, encoding: .utf8)
+
+        let compile = Process()
+        let compileOutput = Pipe()
+        compile.executableURL = URL(filePath: "/usr/bin/xcrun")
+        compile.arguments = [
+            "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror",
+            "-framework", "Foundation", "-x", "objective-c", sourceURL.path,
+            "-o", executableURL.path,
+        ]
+        compile.standardOutput = compileOutput
+        compile.standardError = compileOutput
+        try compile.run()
+        compile.waitUntilExit()
+        let diagnostics = String(
+            decoding: compileOutput.fileHandleForReading.readDataToEndOfFile(),
+            as: UTF8.self
+        )
+        XCTAssertEqual(compile.terminationStatus, 0, diagnostics)
+        guard compile.terminationStatus == 0 else { return }
+
+        let execution = Process()
+        execution.executableURL = executableURL
+        try execution.run()
+        execution.waitUntilExit()
+        XCTAssertEqual(execution.terminationStatus, 0)
     }
 
     private func generate(_ project: PatchProject) throws -> String {

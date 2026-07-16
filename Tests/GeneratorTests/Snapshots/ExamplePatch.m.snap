@@ -12,7 +12,13 @@ typedef NS_ENUM(uint8_t, MPPatchState) {
     MPPatchStateFailed = 2,
 };
 
+static IMP MPBaselineImplementation(IMP implementation);
+
 static MPPatchState MPPatch_0_ExampleManager_featureEnabled_State = MPPatchStatePending;
+
+typedef BOOL (*MPPatch_0_ExampleManager_featureEnabled_Function)(id, SEL);
+
+static MPPatch_0_ExampleManager_featureEnabled_Function MPPatch_0_ExampleManager_featureEnabled_Original = NULL;
 
 static BOOL MPPatch_0_ExampleManager_featureEnabled_Replacement(
     id self,
@@ -40,10 +46,42 @@ static BOOL MPPatch_0_ExampleManager_featureEnabled_Install(void) {
         MPPatch_0_ExampleManager_featureEnabled_State = MPPatchStateFailed;
         return NO;
     }
-    method_setImplementation(method, (IMP)MPPatch_0_ExampleManager_featureEnabled_Replacement);
+
+    IMP resolvedImplementation = method_getImplementation(method);
+    if (resolvedImplementation == NULL) {
+        MPPatch_0_ExampleManager_featureEnabled_State = MPPatchStateFailed;
+        return NO;
+    }
+    IMP replacementImplementation = (IMP)MPPatch_0_ExampleManager_featureEnabled_Replacement;
+    if (class_addMethod(targetClass, selector, replacementImplementation, encoding)) {
+        MPPatch_0_ExampleManager_featureEnabled_Original = (MPPatch_0_ExampleManager_featureEnabled_Function)MPBaselineImplementation(resolvedImplementation);
+    } else {
+        Method directMethod = class_getInstanceMethod(targetClass, selector);
+        IMP directImplementation = directMethod == NULL
+            ? NULL
+            : method_getImplementation(directMethod);
+        if (directImplementation == NULL) {
+            MPPatch_0_ExampleManager_featureEnabled_State = MPPatchStateFailed;
+            return NO;
+        }
+        MPPatch_0_ExampleManager_featureEnabled_Original = (MPPatch_0_ExampleManager_featureEnabled_Function)MPBaselineImplementation(directImplementation);
+        method_setImplementation(directMethod, replacementImplementation);
+    }
     MPPatch_0_ExampleManager_featureEnabled_State = MPPatchStateInstalled;
     NSLog(@"[MachPatch] Installed %@", @"-[ExampleManager featureEnabled]");
     return YES;
+}
+
+static IMP MPBaselineImplementation(IMP implementation) {
+    for (NSUInteger pass = 0; pass < 1; pass += 1) {
+        IMP previous = implementation;
+        if (implementation == (IMP)MPPatch_0_ExampleManager_featureEnabled_Replacement
+            && MPPatch_0_ExampleManager_featureEnabled_Original != NULL) {
+            implementation = (IMP)MPPatch_0_ExampleManager_featureEnabled_Original;
+        }
+        if (implementation == previous) { break; }
+    }
+    return implementation;
 }
 
 static NSUInteger MPInstallPendingPatches(void) {

@@ -744,7 +744,6 @@ private struct PatchEditorView: View {
 
         PatchRuntimeControlEditorView(
             patch: patch,
-            signature: signature,
             model: model
         )
 
@@ -877,16 +876,7 @@ private struct PatchEditorView: View {
     }
 
     private func replacingAction(_ action: PatchAction, in patch: MethodPatch) -> MethodPatch {
-        let replacement = patch.replacing(action: action)
-        guard let control = patch.runtimeControl, let value = control.value else {
-            return replacement
-        }
-        guard
-            PatchRuntimeControlCompatibility.defaultEditableValue(for: action)?.kind == value.kind
-        else {
-            return replacement.replacingRuntimeControl(control.replacingValue(nil))
-        }
-        return replacement
+        patch.replacing(action: action)
     }
 
     @ViewBuilder
