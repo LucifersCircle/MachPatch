@@ -210,15 +210,16 @@ gate follow only after these controls pass their separate device safety checks.
 
 ### Project and state model
 
-- Let users explicitly choose which enabled patches appear in a generated floating control menu.
+- Keep an always-visible Build Workspace checklist where users explicitly choose which patches
+  appear in the generated control menu without navigating back to each method editor.
 - Give the project an activation mode: floating button, three-finger long press, or both. Default to
   the visible floating button so the feature remains discoverable.
 - Start with a universal patch enable/disable toggle, then add typed boolean and integer controls.
   Design string and grouped preset controls separately rather than inferring controls from arbitrary
   patch payloads.
-- Give every exposed control a stable identifier, user-facing title, default value, and persistence
-  policy. Let users order controls in the menu. Namespace persisted state by target identity and
-  patch project.
+- Give every exposed control a stable identifier, user-facing title, and default value. Always
+  restore its last runtime enabled/value state on target launch. Let users order controls in the
+  menu and namespace persisted state by target identity and patch project.
 - Allow integer input only for compatible signed- or unsigned-integer return/replacement actions.
   Validate the configured default, optional bounds, step, and every runtime edit against the exact
   analyzed ABI width and signedness. Never clamp, wrap, or silently coerce an invalid value.
@@ -230,8 +231,9 @@ gate follow only after these controls pass their separate device safety checks.
 - Use an in-process state registry shared by the overlay and generated hooks. Do not require Darwin
   notifications unless a future controller operates from another process.
 - Install controls only when at least one patch is exposed. The floating entry point is a 52-point
-  circular material button with a system hammer symbol, safe-area-aware positioning, edge snapping,
-  dragging, VoiceOver labels, and a session-only hide action that always recovers on relaunch.
+  circular material button with a system hammer symbol, a half-clipped edge-resting position,
+  low-opacity idle treatment, edge snapping, dragging, VoiceOver labels, and a session-only hide
+  action that always recovers on relaunch. VoiceOver fallback keeps the button fully visible.
 - Present a compact scrolling material panel with a master bypass that preserves individual states,
   ordered control rows, installation status, technical method subtitles, and reset-to-defaults.
   Touches outside the button and open panel pass through to the target application.
@@ -256,8 +258,8 @@ gate follow only after these controls pass their separate device safety checks.
 - Test launch timing, late-loaded classes, scene changes, rotations, repeated foregrounding,
   multiple windows, VoiceOver fallback, gesture conflicts, persistence, and projects with no
   exposed controls.
-- Test every supported signed and unsigned integer boundary, invalid input recovery, persistence,
-  and concurrent edits while controlled methods are running.
+- Test every supported signed and unsigned integer boundary, invalid input recovery, automatic
+  launch restoration, and concurrent edits while controlled methods are running.
 - Device-test toggles for immediate and late-loaded patches, verify that runtime-disabled patches
   call the original unchanged, and confirm the target launches when overlay setup cannot complete.
 

@@ -52,20 +52,15 @@ struct PatchRuntimeControlEditorView: View {
                         )
                     )
 
-                    Picker(
-                        "Persistence",
-                        selection: Binding(
-                            get: { control.persistence },
-                            set: { update(control.replacing(persistence: $0)) }
-                        )
-                    ) {
-                        ForEach(PatchRuntimeControlPersistence.allCases, id: \.self) {
-                            persistence in
-                            Text(persistence.displayName).tag(persistence)
-                        }
-                    }
-
                     typedValueEditor(control)
+
+                    Label(
+                        "The last in-app state is restored automatically when the target launches.",
+                        systemImage: "arrow.clockwise.circle"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
                     Label(
                         "When inactive, the hook calls the original method without running any patch behavior.",
@@ -409,13 +404,11 @@ private enum RuntimeControlEditorKind: String {
 extension PatchRuntimeControlConfiguration {
     func replacing(
         title: String? = nil,
-        defaultEnabled: Bool? = nil,
-        persistence: PatchRuntimeControlPersistence? = nil
+        defaultEnabled: Bool? = nil
     ) -> PatchRuntimeControlConfiguration {
         PatchRuntimeControlConfiguration(
             title: title ?? self.title,
             defaultEnabled: defaultEnabled ?? self.defaultEnabled,
-            persistence: persistence ?? self.persistence,
             order: order,
             value: value
         )
@@ -425,18 +418,8 @@ extension PatchRuntimeControlConfiguration {
         PatchRuntimeControlConfiguration(
             title: title,
             defaultEnabled: defaultEnabled,
-            persistence: persistence,
             order: order,
             value: value
         )
-    }
-}
-
-private extension PatchRuntimeControlPersistence {
-    var displayName: String {
-        switch self {
-        case .session: "This Launch"
-        case .acrossLaunches: "Across Launches"
-        }
     }
 }

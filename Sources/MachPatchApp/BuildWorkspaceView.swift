@@ -68,7 +68,7 @@ struct BuildWorkspaceView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 projectSettings
-                if !runtimeControlledPatches.isEmpty {
+                if model.projectDraft != nil {
                     runtimeControlProjectSettings
                 }
                 architectureSummary
@@ -153,10 +153,6 @@ struct BuildWorkspaceView: View {
     private var runtimeControlProjectSettings: some View {
         GroupBox("In-App Controls") {
             VStack(alignment: .leading, spacing: 12) {
-                LabeledContent(
-                    "Exposed Patches",
-                    value: "\(runtimeControlledPatches.count)"
-                )
                 Picker(
                     "Activation",
                     selection: Binding(
@@ -170,8 +166,60 @@ struct BuildWorkspaceView: View {
                         Text(mode.displayName).tag(mode)
                     }
                 }
+
+                Divider()
+
+                HStack {
+                    Text("Available Patches")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Text("\(runtimeControlledPatches.count) selected")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+
+                if !runtimeControlSelectionPatches.isEmpty {
+                    VStack(alignment: .leading, spacing: 9) {
+                        ForEach(runtimeControlSelectionPatches) { patch in
+                            Toggle(
+                                isOn: Binding(
+                                    get: { patch.enabled && patch.runtimeControl != nil },
+                                    set: { model.setRuntimeControlExposed($0, for: patch) }
+                                )
+                            ) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(methodDescription(patch))
+                                        .font(.caption.weight(.medium))
+                                        .lineLimit(1)
+                                    Text(
+                                        patch.enabled
+                                            ? patchActionDescription(patch)
+                                            : patch.runtimeControl == nil
+                                                ? "Disabled in project · unavailable for in-app controls"
+                                                : "Disabled in project · control preserved until re-enabled"
+                                    )
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                                }
+                            }
+                            .toggleStyle(.checkbox)
+                            .disabled(!patch.enabled)
+                        }
+                    }
+                    .padding(10)
+                    .background(
+                        Color(nsColor: .controlBackgroundColor).opacity(0.35),
+                        in: RoundedRectangle(cornerRadius: 8)
+                    )
+                } else {
+                    Text("Create a method patch to make it available here.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 Text(
-                    "The generated overlay becomes part of the target app UI. Gesture activation is never installed while VoiceOver is active."
+                    "Selected patches are remembered automatically. The generated overlay becomes part of the target app UI; gesture activation is never installed while VoiceOver is active."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -308,7 +356,17 @@ struct BuildWorkspaceView: View {
     }
 
     private var runtimeControlledPatches: [MethodPatch] {
-        model.projectDraft?.patches.filter { $0.runtimeControl != nil } ?? []
+        model.projectDraft?.patches.filter { $0.enabled && $0.runtimeControl != nil } ?? []
+    }
+
+    private var runtimeControlSelectionPatches: [MethodPatch] {
+        guard let patches = model.projectDraft?.patches else { return [] }
+        return patches.enumerated().sorted { lhs, rhs in
+            if lhs.element.enabled != rhs.element.enabled {
+                return lhs.element.enabled
+            }
+            return lhs.offset < rhs.offset
+        }.map(\.element)
     }
 
     @ViewBuilder

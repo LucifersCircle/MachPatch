@@ -171,7 +171,6 @@ final class PatchProjectTests: XCTestCase {
             action: .returnBoolean(true),
             runtimeControl: PatchRuntimeControlConfiguration(
                 title: "Feature Enabled",
-                persistence: .acrossLaunches,
                 order: 0,
                 value: .boolean(true)
             )

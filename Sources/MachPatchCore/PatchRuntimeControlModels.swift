@@ -20,28 +20,20 @@ public enum PatchRuntimeControlActivationMode: String, Codable, CaseIterable, Eq
 public struct PatchRuntimeControlConfiguration: Codable, Equatable, Sendable {
     public let title: String
     public let defaultEnabled: Bool
-    public let persistence: PatchRuntimeControlPersistence
     public let order: Int
     public let value: PatchRuntimeControlValue?
 
     public init(
         title: String,
         defaultEnabled: Bool = true,
-        persistence: PatchRuntimeControlPersistence = .session,
         order: Int,
         value: PatchRuntimeControlValue? = nil
     ) {
         self.title = title
         self.defaultEnabled = defaultEnabled
-        self.persistence = persistence
         self.order = order
         self.value = value
     }
-}
-
-public enum PatchRuntimeControlPersistence: String, Codable, CaseIterable, Equatable, Sendable {
-    case session
-    case acrossLaunches
 }
 
 public enum PatchRuntimeControlValue: Equatable, Sendable {

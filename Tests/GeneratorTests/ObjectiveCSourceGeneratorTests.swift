@@ -202,6 +202,9 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
         XCTAssertTrue(source.contains("return runtimeControlValue;"))
         XCTAssertTrue(source.contains("return (signed char)runtimeControlValue;"))
         XCTAssertTrue(source.contains("return (unsigned char)runtimeControlValue;"))
+        XCTAssertFalse(source.contains("BOOL persistent;"))
+        XCTAssertTrue(source.contains("MPLoadPersistedRuntimeControls();"))
+        XCTAssertTrue(source.contains("MPRuntimeControlPersistenceKey(descriptor, @\"enabled\")"))
         XCTAssertTrue(source.contains("static const BOOL MPConfiguredShowsButton = YES;"))
         XCTAssertTrue(source.contains("static const BOOL MPConfiguredInstallsGesture = YES;"))
         XCTAssertTrue(source.contains("gesture.minimumPressDuration = 3.0;"))
@@ -211,6 +214,8 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
         XCTAssertTrue(source.contains("self.buttonHiddenForSession = NO;"))
         XCTAssertTrue(source.contains("self.buttonPanGesture.enabled = !forceAccessibleButton;"))
         XCTAssertTrue(source.contains("[window removeGestureRecognizer:self.activationGesture]"))
+        XCTAssertTrue(source.contains("button.alpha = 0.28;"))
+        XCTAssertTrue(source.contains("CGRectGetMaxX(window.bounds)"))
 
         let bypass = try XCTUnwrap(source.range(of: "if (!runtimeControlEnabled)"))
         let counter = try XCTUnwrap(source.range(of: "__atomic_add_fetch"))
@@ -229,7 +234,6 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
             action: .returnBoolean(true),
             runtimeControl: PatchRuntimeControlConfiguration(
                 title: "Feature Enabled",
-                persistence: .acrossLaunches,
                 order: 0,
                 value: .boolean(false)
             )

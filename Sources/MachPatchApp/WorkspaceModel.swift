@@ -988,7 +988,9 @@ final class WorkspaceModel: ObservableObject {
 
     func updateRuntimeControlActivationMode(_ activationMode: PatchRuntimeControlActivationMode) {
         updateProjectDraft { draft in
-            guard let configuration = draft.runtimeControls else { return }
+            let configuration =
+                draft.runtimeControls
+                ?? PatchRuntimeControlsConfiguration(id: UUID().uuidString)
             draft.runtimeControls = PatchRuntimeControlsConfiguration(
                 id: configuration.id,
                 activationMode: activationMode
@@ -1489,11 +1491,13 @@ final class WorkspaceModel: ObservableObject {
         _ projectDraft: PatchProjectDraft?,
         marksClean: Bool = false
     ) {
-        invalidateBuildState()
+        let projectChanged = self.projectDraft?.project != projectDraft?.project
         self.projectDraft = projectDraft
         if marksClean {
             savedProjectBaseline = projectDraft?.project
         }
+        guard projectChanged else { return }
+        invalidateBuildState()
         refreshBuildWorkspace()
     }
 

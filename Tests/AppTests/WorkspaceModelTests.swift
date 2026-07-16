@@ -599,6 +599,14 @@ final class WorkspaceModelTests: XCTestCase {
         )
         XCTAssertEqual(model.shareableArtifact(for: .dylib), model.lastCompletedExport)
 
+        model.updateOutputName("FixturePatch")
+
+        guard case .succeeded = model.buildState else {
+            return XCTFail("Committing an unchanged field after sharing must preserve the build")
+        }
+        XCTAssertTrue(model.canExportDylib)
+        XCTAssertEqual(model.shareableArtifact(for: .dylib), model.lastCompletedExport)
+
         model.updateOutputName("ChangedPatch")
 
         guard case .stale(let staleArtifact) = model.buildState else {
@@ -624,12 +632,15 @@ final class WorkspaceModelTests: XCTestCase {
         let createdPatch = try model.addPatch(className: "AppController", method: method)
         let configuredPatch = createdPatch.replacing(action: .returnBoolean(true))
         model.updatePatch(configuredPatch)
-        model.updatePatch(configuredPatch.replacing(enabled: false))
+        model.setRuntimeControlExposed(true, for: configuredPatch)
+        let exposedPatch = try XCTUnwrap(model.patchProject?.patches.first)
+        model.updatePatch(exposedPatch.replacing(enabled: false))
 
         let disabledPatch = try XCTUnwrap(model.patchProject?.patches.first)
         XCTAssertFalse(disabledPatch.enabled)
         XCTAssertEqual(disabledPatch.action, .returnBoolean(true))
         XCTAssertEqual(disabledPatch.id, configuredPatch.id)
+        XCTAssertNotNil(disabledPatch.runtimeControl)
         let roundTrippedProject = try PatchProjectCodec.decode(
             PatchProjectCodec.encode(try XCTUnwrap(model.patchProject))
         )
@@ -638,6 +649,9 @@ final class WorkspaceModelTests: XCTestCase {
             return XCTFail("Expected source generation with a disabled patch")
         }
         XCTAssertFalse(disabledBundle.files.first?.contents.contains("featureEnabled") == true)
+        XCTAssertFalse(
+            disabledBundle.files.first?.contents.contains("MPRuntimeControlsOverlay") == true
+        )
 
         model.updatePatch(disabledPatch.replacing(enabled: true))
 
@@ -646,6 +660,9 @@ final class WorkspaceModelTests: XCTestCase {
         }
         XCTAssertTrue(enabledBundle.files.first?.contents.contains("featureEnabled") == true)
         XCTAssertTrue(enabledBundle.files.first?.contents.contains("return YES;") == true)
+        XCTAssertTrue(
+            enabledBundle.files.first?.contents.contains("MPRuntimeControlsOverlay") == true
+        )
     }
 
     func testFailedRebuildPreservesArtifactAndStructuredCompilerDiagnostics() async {
@@ -892,14 +909,17 @@ final class WorkspaceModelTests: XCTestCase {
         let method = try XCTUnwrap(analysis.metadata.classes.first?.instanceMethods.first)
         let patch = try model.addPatch(className: "AppController", method: method)
 
+        model.updateRuntimeControlActivationMode(.both)
+        let namespace = try XCTUnwrap(model.projectDraft?.runtimeControls?.id)
+        XCTAssertEqual(model.projectDraft?.runtimeControls?.activationMode, .both)
+
         model.setRuntimeControlExposed(true, for: patch)
 
         let exposedPatch = try XCTUnwrap(model.projectDraft?.patches.first)
-        let namespace = try XCTUnwrap(model.projectDraft?.runtimeControls?.id)
+        XCTAssertEqual(model.projectDraft?.runtimeControls?.id, namespace)
         XCTAssertNotNil(UUID(uuidString: namespace))
         XCTAssertEqual(exposedPatch.runtimeControl?.title, "featureEnabled")
         XCTAssertEqual(exposedPatch.runtimeControl?.defaultEnabled, true)
-        XCTAssertEqual(exposedPatch.runtimeControl?.persistence, .session)
         XCTAssertEqual(exposedPatch.runtimeControl?.order, 0)
         XCTAssertNil(exposedPatch.runtimeControl?.value)
 
@@ -908,12 +928,10 @@ final class WorkspaceModelTests: XCTestCase {
         let edited = PatchRuntimeControlConfiguration(
             title: "Debug Mode",
             defaultEnabled: false,
-            persistence: .acrossLaunches,
             order: 0,
             value: .boolean(true)
         )
         model.updateRuntimeControl(for: editablePatch, configuration: edited)
-        model.updateRuntimeControlActivationMode(.both)
 
         XCTAssertEqual(model.projectDraft?.patches.first?.runtimeControl, edited)
         XCTAssertEqual(model.projectDraft?.runtimeControls?.activationMode, .both)

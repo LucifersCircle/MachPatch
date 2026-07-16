@@ -265,7 +265,6 @@ private struct SourceRenderer {
                 __unsafe_unretained NSString *methodDescription;
                 BOOL *enabledStorage;
                 BOOL defaultEnabled;
-                BOOL persistent;
                 MPRuntimeControlKind kind;
                 void *valueStorage;
                 BOOL defaultBoolean;
@@ -303,7 +302,6 @@ private struct SourceRenderer {
                 NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
                 for (NSUInteger index = 0; index < MPRuntimeControlCount(); index += 1) {
                     MPRuntimeControlDescriptor *descriptor = &MPRuntimeControlDescriptors[index];
-                    if (!descriptor->persistent) { continue; }
 
                     id enabled = [defaults objectForKey:
                         MPRuntimeControlPersistenceKey(descriptor, @"enabled")];
@@ -418,7 +416,6 @@ private struct SourceRenderer {
                 NSString *suffix,
                 id value
             ) {
-                if (!descriptor->persistent) { return; }
                 NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
                 NSString *key = MPRuntimeControlPersistenceKey(descriptor, suffix);
                 if (value == nil) {
@@ -593,6 +590,7 @@ private struct SourceRenderer {
             @property(nonatomic, assign) CGPoint buttonCenter;
             - (instancetype)initWithWindow:(UIWindow *)window;
             - (void)updateEntryPoints;
+            - (void)updateButtonAppearanceAnimated:(BOOL)animated;
             - (void)layoutControls;
             - (void)refreshControls;
             - (void)invalidate;
@@ -623,6 +621,7 @@ private struct SourceRenderer {
                 button.layer.shadowOpacity = 0.28;
                 button.layer.shadowRadius = 8.0;
                 button.layer.shadowOffset = CGSizeMake(0.0, 3.0);
+                button.alpha = 0.28;
                 if (@available(iOS 13.0, *)) {
                     UIImageSymbolConfiguration *configuration =
                         [UIImageSymbolConfiguration configurationWithPointSize:22.0
@@ -639,6 +638,14 @@ private struct SourceRenderer {
                 [button addTarget:self
                     action:@selector(buttonTapped:)
                     forControlEvents:UIControlEventTouchUpInside];
+                [button addTarget:self
+                    action:@selector(buttonInteractionBegan:)
+                    forControlEvents:UIControlEventTouchDown];
+                [button addTarget:self
+                    action:@selector(buttonInteractionEnded:)
+                    forControlEvents:(UIControlEventTouchUpOutside
+                        | UIControlEventTouchCancel
+                        | UIControlEventTouchDragExit)];
 
                 UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc]
                     initWithTarget:self
@@ -670,6 +677,7 @@ private struct SourceRenderer {
                 self.button.hidden = !shouldShowButton || self.buttonHiddenForSession;
                 self.buttonPanGesture.enabled = !forceAccessibleButton;
                 self.buttonLongPressGesture.enabled = !forceAccessibleButton;
+                [self updateButtonAppearanceAnimated:NO];
 
                 BOOL shouldInstallGesture = MPConfiguredInstallsGesture
                     && !forceAccessibleButton;
@@ -694,6 +702,20 @@ private struct SourceRenderer {
                 }
             }
 
+            - (void)updateButtonAppearanceAnimated:(BOOL)animated {
+                BOOL forceAccessibleButton = MPVoiceOverFallbackForSession
+                    || UIAccessibilityIsVoiceOverRunning();
+                CGFloat alpha = (forceAccessibleButton || self.panelVisible) ? 1.0 : 0.28;
+                void (^changes)(void) = ^{
+                    self.button.alpha = alpha;
+                };
+                if (animated) {
+                    [UIView animateWithDuration:0.16 animations:changes];
+                } else {
+                    changes();
+                }
+            }
+
             - (CGRect)safeRect {
                 UIWindow *window = self.window;
                 if (window == nil) { return CGRectZero; }
@@ -710,15 +732,21 @@ private struct SourceRenderer {
                 if (window == nil) { return; }
                 CGRect safe = [self safeRect];
                 if (self.button != nil) {
+                    BOOL forceAccessibleButton = MPVoiceOverFallbackForSession
+                        || UIAccessibilityIsVoiceOverRunning();
+                    CGFloat minimumX = forceAccessibleButton
+                        ? CGRectGetMinX(safe) + 26.0
+                        : CGRectGetMinX(window.bounds);
+                    CGFloat maximumX = forceAccessibleButton
+                        ? CGRectGetMaxX(safe) - 26.0
+                        : CGRectGetMaxX(window.bounds);
                     if (!self.hasButtonPosition) {
                         self.buttonCenter = CGPointMake(
-                            CGRectGetMaxX(safe) - 26.0,
+                            maximumX,
                             CGRectGetMidY(safe)
                         );
                         self.hasButtonPosition = YES;
                     }
-                    CGFloat minimumX = CGRectGetMinX(safe) + 26.0;
-                    CGFloat maximumX = CGRectGetMaxX(safe) - 26.0;
                     CGFloat minimumY = CGRectGetMinY(safe) + 26.0;
                     CGFloat maximumY = CGRectGetMaxY(safe) - 26.0;
                     self.buttonCenter = CGPointMake(
@@ -830,6 +858,14 @@ private struct SourceRenderer {
                     1
                 );
                 [stack addArrangedSubview:self.summaryLabel];
+
+                UILabel *behaviorNote = MPMakeRuntimeLabel(
+                    [UIFont preferredFontForTextStyle:UIFontTextStyleCaption2],
+                    MPSecondaryLabelColor(),
+                    0
+                );
+                behaviorNote.text = @"Turning a patch off affects its next method call; it cannot undo state the app already cached.";
+                [stack addArrangedSubview:behaviorNote];
 
                 UISwitch *master = [[UISwitch alloc] initWithFrame:CGRectZero];
                 [master addTarget:self
@@ -972,8 +1008,10 @@ private struct SourceRenderer {
                 [self makePanelIfNeeded];
                 self.panelVisible = YES;
                 self.panel.hidden = NO;
+                self.panel.accessibilityViewIsModal = YES;
                 [self refreshControls];
                 [self layoutControls];
+                [self updateButtonAppearanceAnimated:YES];
                 [self.window bringSubviewToFront:self.panel];
                 UIAccessibilityPostNotification(
                     UIAccessibilityScreenChangedNotification,
@@ -987,6 +1025,7 @@ private struct SourceRenderer {
                 self.panelVisible = NO;
                 self.panel.hidden = YES;
                 self.panel.accessibilityViewIsModal = NO;
+                [self updateButtonAppearanceAnimated:YES];
                 if (self.button != nil && !self.button.hidden) {
                     UIAccessibilityPostNotification(
                         UIAccessibilityScreenChangedNotification,
@@ -1008,9 +1047,23 @@ private struct SourceRenderer {
                 [self togglePanel];
             }
 
+            - (void)buttonInteractionBegan:(UIButton *)sender {
+                [UIView animateWithDuration:0.12 animations:^{
+                    sender.alpha = 1.0;
+                }];
+            }
+
+            - (void)buttonInteractionEnded:(UIButton *)sender {
+                (void)sender;
+                [self updateButtonAppearanceAnimated:YES];
+            }
+
             - (void)buttonPanned:(UIPanGestureRecognizer *)gesture {
                 UIView *view = gesture.view;
                 if (view == nil) { return; }
+                if (gesture.state == UIGestureRecognizerStateBegan) {
+                    view.alpha = 1.0;
+                }
                 CGPoint translation = [gesture translationInView:self.window];
                 self.buttonCenter = CGPointMake(
                     self.buttonCenter.x + translation.x,
@@ -1021,22 +1074,32 @@ private struct SourceRenderer {
                 if (gesture.state == UIGestureRecognizerStateEnded
                     || gesture.state == UIGestureRecognizerStateCancelled) {
                     CGRect safe = [self safeRect];
+                    BOOL forceAccessibleButton = MPVoiceOverFallbackForSession
+                        || UIAccessibilityIsVoiceOverRunning();
                     self.buttonCenter = CGPointMake(
                         self.buttonCenter.x < CGRectGetMidX(safe)
-                            ? CGRectGetMinX(safe) + 26.0
-                            : CGRectGetMaxX(safe) - 26.0,
+                            ? (forceAccessibleButton
+                                ? CGRectGetMinX(safe) + 26.0
+                                : CGRectGetMinX(self.window.bounds))
+                            : (forceAccessibleButton
+                                ? CGRectGetMaxX(safe) - 26.0
+                                : CGRectGetMaxX(self.window.bounds)),
                         self.buttonCenter.y
                     );
                     [UIView animateWithDuration:0.2 animations:^{
                         [self layoutControls];
+                    } completion:^(__unused BOOL finished) {
+                        [self updateButtonAppearanceAnimated:YES];
                     }];
                 }
             }
 
             - (void)buttonLongPressed:(UILongPressGestureRecognizer *)gesture {
                 if (gesture.state != UIGestureRecognizerStateBegan) { return; }
+                self.button.alpha = 1.0;
                 UIViewController *presenter = MPTopViewController(self.window.rootViewController);
                 if (presenter == nil || [presenter isKindOfClass:[UIAlertController class]]) {
+                    [self updateButtonAppearanceAnimated:YES];
                     return;
                 }
                 UIAlertController *menu = [UIAlertController
@@ -1069,6 +1132,7 @@ private struct SourceRenderer {
                 popover.sourceView = self.button;
                 popover.sourceRect = self.button.bounds;
                 [presenter presentViewController:menu animated:YES completion:nil];
+                [self updateButtonAppearanceAnimated:YES];
             }
 
             - (void)activationGestureRecognized:(UILongPressGestureRecognizer *)gesture {
@@ -1264,7 +1328,9 @@ private struct SourceRenderer {
                     UILabel *status = self.statusLabels[@(index)];
                     switch (*descriptor->patchState) {
                     case MPPatchStateInstalled:
-                        status.text = enabled ? @"Installed · Patched" : @"Installed · Original";
+                        status.text = enabled
+                            ? @"Installed · Patched on next call"
+                            : @"Installed · Original on next call";
                         if (@available(iOS 13.0, *)) {
                             status.textColor = UIColor.systemGreenColor;
                         }
@@ -1427,7 +1493,6 @@ private struct SourceRenderer {
             ObjectiveCLiteral.string(context.objcDescription),
             "&\(context.controlEnabledName)",
             control.defaultEnabled ? "YES" : "NO",
-            control.persistence == .acrossLaunches ? "YES" : "NO",
         ]
         let valueFields: [String]
         switch control.value {
