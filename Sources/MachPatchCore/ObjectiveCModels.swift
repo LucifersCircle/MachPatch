@@ -4,6 +4,7 @@ public struct ObjectiveCAnalysis: Codable, Equatable, Sendable {
     public let sliceIndex: Int
     public let architecture: MachOArchitecture
     public let backend: ObjectiveCAnalyzerBackend
+    public let notices: [String]
     public let warnings: [String]
     public let metadata: ObjectiveCMetadata
 
@@ -13,6 +14,7 @@ public struct ObjectiveCAnalysis: Codable, Equatable, Sendable {
         sliceIndex: Int,
         architecture: MachOArchitecture,
         backend: ObjectiveCAnalyzerBackend,
+        notices: [String] = [],
         warnings: [String],
         metadata: ObjectiveCMetadata
     ) {
@@ -21,8 +23,47 @@ public struct ObjectiveCAnalysis: Codable, Equatable, Sendable {
         self.sliceIndex = sliceIndex
         self.architecture = architecture
         self.backend = backend
+        self.notices = notices
         self.warnings = warnings
         self.metadata = metadata
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case target
+        case image
+        case sliceIndex
+        case architecture
+        case backend
+        case notices
+        case warnings
+        case metadata
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let target = try container.decode(ResolvedTarget.self, forKey: .target)
+        self.init(
+            target: target,
+            image: try container.decodeIfPresent(ResolvedImage.self, forKey: .image),
+            sliceIndex: try container.decode(Int.self, forKey: .sliceIndex),
+            architecture: try container.decode(MachOArchitecture.self, forKey: .architecture),
+            backend: try container.decode(ObjectiveCAnalyzerBackend.self, forKey: .backend),
+            notices: try container.decodeIfPresent([String].self, forKey: .notices) ?? [],
+            warnings: try container.decode([String].self, forKey: .warnings),
+            metadata: try container.decode(ObjectiveCMetadata.self, forKey: .metadata)
+        )
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(target, forKey: .target)
+        try container.encode(image, forKey: .image)
+        try container.encode(sliceIndex, forKey: .sliceIndex)
+        try container.encode(architecture, forKey: .architecture)
+        try container.encode(backend, forKey: .backend)
+        try container.encode(notices, forKey: .notices)
+        try container.encode(warnings, forKey: .warnings)
+        try container.encode(metadata, forKey: .metadata)
     }
 }
 

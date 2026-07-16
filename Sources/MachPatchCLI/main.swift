@@ -223,6 +223,7 @@ struct MachPatchCommand {
                         sliceIndex: analysis.sliceIndex,
                         architecture: analysis.architecture,
                         backend: analysis.backend,
+                        notices: analysis.notices,
                         warnings: analysis.warnings,
                         classes: analysis.metadata.classes.map(ObjectiveCClassSummary.init),
                         categoryOwners: categoryOwnerSummaries(in: analysis.metadata)
@@ -256,6 +257,7 @@ struct MachPatchCommand {
                         sliceIndex: analysis.sliceIndex,
                         architecture: analysis.architecture,
                         backend: analysis.backend,
+                        notices: analysis.notices,
                         warnings: analysis.warnings,
                         className: className,
                         categoryNames: analysis.metadata.categories.filter {
@@ -303,6 +305,7 @@ struct MachPatchCommand {
                     sliceIndex: analysis.sliceIndex,
                     architecture: analysis.architecture,
                     backend: analysis.backend,
+                    notices: analysis.notices,
                     warnings: analysis.warnings,
                     report: ObjectiveCPatchabilityAnalyzer.report(for: analysis.metadata)
                 )
@@ -665,6 +668,7 @@ private struct ClassListOutput: Encodable {
     let sliceIndex: Int
     let architecture: MachOArchitecture
     let backend: ObjectiveCAnalyzerBackend
+    let notices: [String]
     let warnings: [String]
     let classes: [ObjectiveCClassSummary]
     let categoryOwners: [ObjectiveCCategoryOwnerSummary]
@@ -711,6 +715,7 @@ private struct MethodListOutput: Encodable {
     let sliceIndex: Int
     let architecture: MachOArchitecture
     let backend: ObjectiveCAnalyzerBackend
+    let notices: [String]
     let warnings: [String]
     let className: String
     let categoryNames: [String]
@@ -723,6 +728,7 @@ private struct PatchabilityCommandOutput: Encodable {
     let sliceIndex: Int
     let architecture: MachOArchitecture
     let backend: ObjectiveCAnalyzerBackend
+    let notices: [String]
     let warnings: [String]
     let report: ObjectiveCPatchabilityReport
 }
@@ -756,6 +762,12 @@ private enum HumanPatchabilityReportFormatter {
                 contentsOf: summary.unsupportedTypeCounts.prefix(15).map {
                     "  \($0.count)  \(roleLabel($0.role)) \($0.typeKind.rawValue) (\($0.typeEncoding))"
                 })
+        }
+
+        if !output.notices.isEmpty {
+            lines.append("")
+            lines.append("Analyzer notices:")
+            lines.append(contentsOf: output.notices.map { "  - \($0)" })
         }
 
         if !output.warnings.isEmpty {

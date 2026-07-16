@@ -233,6 +233,11 @@ struct TargetSummaryView: View {
                     LabeledContent("Image", value: analysis.image.executableName)
                     LabeledContent("Architecture", value: analysis.architecture.rawValue)
                     LabeledContent("Metadata backend", value: analysis.backend.rawValue)
+                    ForEach(analysis.notices, id: \.self) { notice in
+                        Label(notice, systemImage: "info.circle")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
                     ForEach(analysis.warnings, id: \.self) { warning in
                         Label(warning, systemImage: "exclamationmark.triangle")
                             .font(.callout)

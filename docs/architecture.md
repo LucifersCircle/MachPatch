@@ -81,7 +81,8 @@ layer and must not be added to `MachOInspector`.
 
 `ObjectiveCAnalyzer` exposes normalized `Codable` and `Sendable` models that do not expose a
 backend's native object model. It rejects encrypted slices, invokes providers in priority order,
-and records unavailable or failed providers as warnings whenever a later provider succeeds.
+records unavailable optional providers as notices, and preserves actual provider extraction
+failures as warnings whenever a later provider succeeds.
 
 The provider chain is:
 

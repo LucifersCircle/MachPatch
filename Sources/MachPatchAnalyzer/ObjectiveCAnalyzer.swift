@@ -41,11 +41,17 @@ public struct ObjectiveCAnalyzer: Sendable {
             )
         }
 
+        var notices: [String] = []
         var warnings: [String] = []
+        var failureReasons: [String] = []
         for provider in providers {
             switch provider.availability() {
             case .unavailable(let reason):
-                warnings.append("\(provider.backend.rawValue) unavailable: \(reason)")
+                let failureReason = "\(provider.backend.rawValue) unavailable: \(reason)"
+                failureReasons.append(failureReason)
+                notices.append(
+                    "Optional \(provider.backend.rawValue) backend unavailable: \(reason)"
+                )
                 continue
             case .available:
                 break
@@ -62,6 +68,7 @@ public struct ObjectiveCAnalyzer: Sendable {
                     sliceIndex: sliceIndex,
                     architecture: slice.architecture,
                     backend: provider.backend,
+                    notices: notices,
                     warnings: warnings,
                     metadata: ObjectiveCMetadataNormalizer.normalize(
                         rawMetadata,
@@ -69,12 +76,13 @@ public struct ObjectiveCAnalyzer: Sendable {
                     )
                 )
             } catch {
-                warnings.append(
+                let failureReason =
                     "\(provider.backend.rawValue) failed: \(error.localizedDescription)"
-                )
+                failureReasons.append(failureReason)
+                warnings.append(failureReason)
             }
         }
 
-        throw ObjectiveCAnalyzerError.allProvidersFailed(warnings)
+        throw ObjectiveCAnalyzerError.allProvidersFailed(failureReasons)
     }
 }

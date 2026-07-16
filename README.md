@@ -133,10 +133,10 @@ identity. Matching encodings become one method record with all declaration origi
 encodings remain visible but are blocked from patching.
 
 The analyzer first probes the bundled Python bridge for LIEF Extended Objective-C support. When
-that optional capability is unavailable, it records the reason in `warnings` and falls back to
-Apple's `xcrun otool`. The fallback resolves selector references against the executable's method
-name and selector-reference sections; it never assigns a global selector to a class without an
-address relationship.
+that optional capability is unavailable, it records an informational notice and falls back to
+Apple's `xcrun otool`. Provider extraction failures remain warnings. The fallback resolves selector
+references against the executable's method name and selector-reference sections; it never assigns
+a global selector to a class without an address relationship.
 
 Both commands reject an encrypted slice before metadata extraction. `--json` is accepted for
 script compatibility; JSON is the only output format during the CLI-first implementation.

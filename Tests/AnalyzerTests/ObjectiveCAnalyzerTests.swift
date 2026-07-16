@@ -5,7 +5,7 @@ import XCTest
 @testable import MachPatchAnalyzer
 
 final class ObjectiveCAnalyzerTests: XCTestCase {
-    func testFallsBackToAvailableProviderAndPreservesWarning() throws {
+    func testFallsBackToAvailableProviderAndReportsOptionalNotice() throws {
         let fixture = try FixtureTarget(data: MachOFixtureFactory.thin64(cryptID: 0))
         defer { fixture.remove() }
 
@@ -34,8 +34,12 @@ final class ObjectiveCAnalyzerTests: XCTestCase {
 
         XCTAssertEqual(analysis.backend, .otool)
         XCTAssertEqual(
+            analysis.notices,
+            ["Optional liefExtended backend unavailable: test dependency is absent"]
+        )
+        XCTAssertEqual(
             analysis.warnings,
-            ["liefExtended unavailable: test dependency is absent"]
+            []
         )
         XCTAssertEqual(analysis.architecture, .arm64)
         XCTAssertEqual(analysis.metadata.classes.map(\.name), ["FixtureController"])
