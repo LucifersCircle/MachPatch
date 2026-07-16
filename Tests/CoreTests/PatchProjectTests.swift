@@ -159,6 +159,155 @@ final class PatchProjectTests: XCTestCase {
         XCTAssertEqual(try PatchProjectCodec.decode(PatchProjectCodec.encode(project)), project)
     }
 
+    func testRuntimeControlsRoundTripAndValidateTypedValues() throws {
+        let runtimeControls = PatchRuntimeControlsConfiguration(
+            id: "98AF657A-7E97-43B4-A22A-55A4227382FA",
+            activationMode: .both
+        )
+        let boolean = makePatch(
+            id: "4F154FAA-1E35-44AA-B014-30EAE65C3F47",
+            selector: "featureEnabled",
+            encoding: "B@:",
+            action: .returnBoolean(true),
+            runtimeControl: PatchRuntimeControlConfiguration(
+                title: "Feature Enabled",
+                persistence: .acrossLaunches,
+                order: 0,
+                value: .boolean(true)
+            )
+        )
+        let signed = makePatch(
+            id: "89D657EF-DC69-4E43-A5B9-2BCC35745670",
+            selector: "signedValue",
+            encoding: "c@:",
+            action: .returnSignedInteger(0),
+            runtimeControl: PatchRuntimeControlConfiguration(
+                title: "Signed Value",
+                order: 1,
+                value: .signedInteger(
+                    PatchRuntimeSignedIntegerConfiguration(
+                        defaultValue: 5,
+                        minimumValue: -10,
+                        maximumValue: 10,
+                        step: 2
+                    )
+                )
+            )
+        )
+        let unsigned = makePatch(
+            id: "F848AF8C-8C56-43B5-8CD2-A9377170C47B",
+            selector: "unsignedValue",
+            encoding: "C@:",
+            action: .callOriginalAndReplace(.unsignedInteger(1)),
+            runtimeControl: PatchRuntimeControlConfiguration(
+                title: "Unsigned Value",
+                defaultEnabled: false,
+                order: 2,
+                value: .unsignedInteger(
+                    PatchRuntimeUnsignedIntegerConfiguration(
+                        defaultValue: 8,
+                        minimumValue: 0,
+                        maximumValue: 100,
+                        step: 4
+                    )
+                )
+            )
+        )
+        let project = makeProject(
+            runtimeControls: runtimeControls,
+            patches: [boolean, signed, unsigned]
+        )
+
+        XCTAssertTrue(PatchProjectValidator.validate(project).isValid)
+        XCTAssertEqual(try PatchProjectCodec.decode(PatchProjectCodec.encode(project)), project)
+    }
+
+    func testRuntimeControlsRequireValidProjectAndPatchConfiguration() {
+        let control = PatchRuntimeControlConfiguration(
+            title: "\n",
+            order: -1,
+            value: .signedInteger(
+                PatchRuntimeSignedIntegerConfiguration(
+                    defaultValue: 2,
+                    minimumValue: 5,
+                    maximumValue: 1,
+                    step: 0
+                )
+            )
+        )
+        let patch = makePatch(
+            action: .returnBoolean(true),
+            runtimeControl: control
+        )
+
+        let missingProjectConfiguration = PatchProjectValidator.validate(
+            makeProject(patches: [patch])
+        )
+        XCTAssertTrue(
+            missingProjectConfiguration.errors.contains {
+                $0.code == .missingRuntimeControlsConfiguration
+            }
+        )
+        XCTAssertTrue(
+            missingProjectConfiguration.errors.contains { $0.code == .invalidRuntimeControlTitle }
+        )
+        XCTAssertTrue(
+            missingProjectConfiguration.errors.contains { $0.code == .invalidRuntimeControlOrder }
+        )
+        XCTAssertTrue(
+            missingProjectConfiguration.errors.contains { $0.code == .incompatibleRuntimeControl }
+        )
+
+        let invalidNamespace = PatchProjectValidator.validate(
+            makeProject(
+                runtimeControls: PatchRuntimeControlsConfiguration(id: "not-a-uuid"),
+                patches: [patch]
+            )
+        )
+        XCTAssertTrue(
+            invalidNamespace.errors.contains { $0.code == .invalidRuntimeControlsID }
+        )
+    }
+
+    func testRuntimeIntegerControlsRespectExactABIBounds() {
+        let runtimeControls = PatchRuntimeControlsConfiguration(
+            id: "98AF657A-7E97-43B4-A22A-55A4227382FA"
+        )
+        let signed = makePatch(
+            selector: "signedValue",
+            encoding: "c@:",
+            action: .returnSignedInteger(0),
+            runtimeControl: PatchRuntimeControlConfiguration(
+                title: "Signed Value",
+                order: 0,
+                value: .signedInteger(
+                    PatchRuntimeSignedIntegerConfiguration(defaultValue: 128)
+                )
+            )
+        )
+        let unsigned = makePatch(
+            id: "89D657EF-DC69-4E43-A5B9-2BCC35745670",
+            selector: "unsignedValue",
+            encoding: "C@:",
+            action: .returnUnsignedInteger(0),
+            runtimeControl: PatchRuntimeControlConfiguration(
+                title: "Unsigned Value",
+                order: 1,
+                value: .unsignedInteger(
+                    PatchRuntimeUnsignedIntegerConfiguration(defaultValue: 256)
+                )
+            )
+        )
+        let report = PatchProjectValidator.validate(
+            makeProject(runtimeControls: runtimeControls, patches: [signed, unsigned])
+        )
+
+        XCTAssertEqual(
+            report.errors.filter { $0.code == .incompatibleRuntimeControl }.count,
+            2
+        )
+    }
+
     func testAdvancedValidationBlocksUnsafeCombinations() {
         let advanced = PatchAdvancedConfiguration(
             argumentReplacements: [
@@ -545,6 +694,7 @@ final class PatchProjectTests: XCTestCase {
         executableSHA256: String = String(repeating: "a", count: 64),
         outputName: String = "ExamplePatch",
         action: PatchAction = .returnBoolean(true),
+        runtimeControls: PatchRuntimeControlsConfiguration? = nil,
         patches: [MethodPatch]? = nil
     ) -> PatchProject {
         PatchProject(
@@ -563,6 +713,7 @@ final class PatchProjectTests: XCTestCase {
                 outputName: outputName,
                 enableARC: true
             ),
+            runtimeControls: runtimeControls,
             patches: patches ?? [makePatch(action: action)]
         )
     }
@@ -572,7 +723,8 @@ final class PatchProjectTests: XCTestCase {
         selector: String = "featureEnabled",
         encoding: String = "B@:",
         action: PatchAction = .returnBoolean(true),
-        advanced: PatchAdvancedConfiguration? = nil
+        advanced: PatchAdvancedConfiguration? = nil,
+        runtimeControl: PatchRuntimeControlConfiguration? = nil
     ) -> MethodPatch {
         MethodPatch(
             id: id,
@@ -582,7 +734,8 @@ final class PatchProjectTests: XCTestCase {
             methodKind: .instance,
             expectedTypeEncoding: encoding,
             action: action,
-            advanced: advanced
+            advanced: advanced,
+            runtimeControl: runtimeControl
         )
     }
 }

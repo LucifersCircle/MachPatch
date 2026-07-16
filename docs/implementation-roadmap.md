@@ -202,7 +202,66 @@ explicit throughout the workflow.
   and each supported export format.
 - Run the complete fixture workflow without relying on a decrypted third-party application.
 
-## Phase 7: stability and product polish
+## Phase 7: opt-in runtime controls
+
+The generated runtime surface is larger and more invasive than an ordinary method patch, so
+design and threat modeling precede implementation. Phase 8 release polish and its public-release
+gate follow only after these controls pass their separate device safety checks.
+
+### Project and state model
+
+- Let users explicitly choose which enabled patches appear in a generated floating control menu.
+- Give the project an activation mode: floating button, three-finger long press, or both. Default to
+  the visible floating button so the feature remains discoverable.
+- Start with a universal patch enable/disable toggle, then add typed boolean and integer controls.
+  Design string and grouped preset controls separately rather than inferring controls from arbitrary
+  patch payloads.
+- Give every exposed control a stable identifier, user-facing title, default value, and persistence
+  policy. Let users order controls in the menu. Namespace persisted state by target identity and
+  patch project.
+- Allow integer input only for compatible signed- or unsigned-integer return/replacement actions.
+  Validate the configured default, optional bounds, step, and every runtime edit against the exact
+  analyzed ABI width and signedness. Never clamp, wrap, or silently coerce an invalid value.
+- Keep disabled project patches out of builds. A runtime-disabled exposed patch remains installed
+  but forwards the original invocation unchanged.
+
+### Generated runtime and overlay
+
+- Use an in-process state registry shared by the overlay and generated hooks. Do not require Darwin
+  notifications unless a future controller operates from another process.
+- Install controls only when at least one patch is exposed. The floating entry point is a 52-point
+  circular material button with a system hammer symbol, safe-area-aware positioning, edge snapping,
+  dragging, VoiceOver labels, and a session-only hide action that always recovers on relaunch.
+- Present a compact scrolling material panel with a master bypass that preserves individual states,
+  ordered control rows, installation status, technical method subtitles, and reset-to-defaults.
+  Touches outside the button and open panel pass through to the target application.
+- Implement an optional fixed three-second, three-finger long press with a non-cancelling recognizer
+  and haptic confirmation when it succeeds. It opens the panel at a safe centered position and can
+  recover a hidden button when both activation modes are enabled. Never install this recognizer
+  while VoiceOver is active. Observe VoiceOver status changes; if it turns on, immediately remove
+  every MachPatch gesture recognizer and expose the accessible floating button for the rest of the
+  session, including for gesture-only projects. This fallback must not consume VoiceOver gestures.
+- Attach one overlay to each active window scene while sharing one process-wide control registry.
+  Reconcile foregrounding, disconnection, rotation, and safe-area changes without duplicating state.
+- Avoid private APIs, avoid intercepting unrelated application events, and keep all UI work on the
+  main thread.
+- Make every controlled hook read state cheaply and atomically without changing the typed original
+  calling convention. Read the enabled state and any typed value once at invocation start so a
+  concurrent UI edit cannot split one invocation across two configurations.
+
+### Safety and acceptance
+
+- Warn that the generated overlay becomes part of the target app's UI and may affect screenshots,
+  automation, and application review behavior.
+- Test launch timing, late-loaded classes, scene changes, rotations, repeated foregrounding,
+  multiple windows, VoiceOver fallback, gesture conflicts, persistence, and projects with no
+  exposed controls.
+- Test every supported signed and unsigned integer boundary, invalid input recovery, persistence,
+  and concurrent edits while controlled methods are running.
+- Device-test toggles for immediate and late-loaded patches, verify that runtime-disabled patches
+  call the original unchanged, and confirm the target launches when overlay setup cannot complete.
+
+## Phase 8: stability and product polish
 
 ### Unified unsaved-changes protection
 
@@ -255,43 +314,6 @@ explicit throughout the workflow.
 - Measure and record the stress target's initial load, class search, method search, patch mutation,
   and image-switch timings before and after optimization.
 - Verify every export can invoke the native share picker with the exact completed artifact.
-
-## Phase 8: opt-in runtime controls
-
-This phase begins only after the Phase 6 and Phase 7 acceptance gates pass. Its generated runtime
-surface is larger and more invasive than an ordinary method patch, so design and threat modeling
-precede implementation.
-
-### Project and state model
-
-- Let users explicitly choose which enabled patches appear in a generated floating control menu.
-- Start with enable/disable toggles. Design editable boolean, numeric, string, and grouped preset
-  controls separately rather than inferring controls from arbitrary patch payloads.
-- Give every exposed control a stable identifier, user-facing title, default value, and persistence
-  policy. Namespace persisted state by target identity and patch project.
-- Keep disabled project patches out of builds. A runtime-disabled exposed patch remains installed
-  but forwards the original invocation unchanged.
-
-### Generated runtime and overlay
-
-- Use an in-process state registry shared by the overlay and generated hooks. Do not require Darwin
-  notifications unless a future controller operates from another process.
-- Install the floating button only when at least one control is exposed. Support safe-area-aware
-  positioning, dragging, hiding, VoiceOver labels, and a gesture or project option that can recover
-  an off-screen button.
-- Avoid private APIs, avoid intercepting unrelated application events, and keep all UI work on the
-  main thread.
-- Make every controlled hook read state cheaply and atomically without changing the typed original
-  calling convention.
-
-### Safety and acceptance
-
-- Warn that the generated overlay becomes part of the target app's UI and may affect screenshots,
-  automation, and application review behavior.
-- Test launch timing, late-loaded classes, scene changes, rotations, repeated foregrounding,
-  multiple windows, persistence, and projects with no exposed controls.
-- Device-test toggles for immediate and late-loaded patches, verify that runtime-disabled patches
-  call the original unchanged, and confirm the target launches when overlay setup cannot complete.
 
 ## Deferred until evidence justifies them
 

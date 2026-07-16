@@ -8,6 +8,7 @@ struct PatchProjectDraft: Equatable {
     var minimumIOSVersion: String
     var outputName: String
     var enableARC: Bool
+    var runtimeControls: PatchRuntimeControlsConfiguration?
     private(set) var patches: [MethodPatch]
 
     init?(loadedTarget: LoadedTarget) {
@@ -28,6 +29,7 @@ struct PatchProjectDraft: Equatable {
             loadedTarget.target.minimumOSVersion ?? slice.minimumOSVersion ?? ""
         outputName = Self.defaultOutputName(for: loadedTarget.inspection.image.executableName)
         enableARC = true
+        runtimeControls = nil
         patches = []
     }
 
@@ -38,6 +40,7 @@ struct PatchProjectDraft: Equatable {
         minimumIOSVersion = project.build.minimumIOSVersion
         outputName = project.build.outputName
         enableARC = project.build.enableARC
+        runtimeControls = project.runtimeControls
         patches = project.patches
     }
 
@@ -51,6 +54,7 @@ struct PatchProjectDraft: Equatable {
                 outputName: outputName,
                 enableARC: enableARC
             ),
+            runtimeControls: runtimeControls,
             patches: patches
         )
     }
@@ -281,7 +285,8 @@ extension MethodPatch {
             methodKind: methodKind,
             expectedTypeEncoding: expectedTypeEncoding,
             action: action ?? self.action,
-            advanced: advanced
+            advanced: advanced,
+            runtimeControl: runtimeControl
         )
     }
 
@@ -294,7 +299,23 @@ extension MethodPatch {
             methodKind: methodKind,
             expectedTypeEncoding: expectedTypeEncoding,
             action: action,
-            advanced: advanced?.isEmpty == true ? nil : advanced
+            advanced: advanced?.isEmpty == true ? nil : advanced,
+            runtimeControl: runtimeControl
+        )
+    }
+
+    func replacingRuntimeControl(_ runtimeControl: PatchRuntimeControlConfiguration?) -> MethodPatch
+    {
+        MethodPatch(
+            id: id,
+            enabled: enabled,
+            className: className,
+            selector: selector,
+            methodKind: methodKind,
+            expectedTypeEncoding: expectedTypeEncoding,
+            action: action,
+            advanced: advanced,
+            runtimeControl: runtimeControl
         )
     }
 }

@@ -80,6 +80,12 @@ final class PatchDylibBuilderTests: XCTestCase {
         XCTAssertTrue(compile.arguments.contains("-miphoneos-version-min=15.2"))
         XCTAssertTrue(compile.arguments.contains("-fobjc-arc"))
         XCTAssertTrue(
+            compile.arguments.indices.dropLast().contains { index in
+                compile.arguments[index] == "-framework"
+                    && compile.arguments[index + 1] == "CoreGraphics"
+            }
+        )
+        XCTAssertTrue(
             compile.arguments.contains("-Wl,-install_name,@rpath/FixturePatch.dylib")
         )
         XCTAssertTrue(compile.arguments.contains(firstRecord.sourcePath))

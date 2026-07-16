@@ -119,6 +119,161 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
         XCTAssertTrue(first.contains("NSLog(@\"after = %d\", (int)originalResult);"))
     }
 
+    func testGeneratesAtomicRuntimeControlBypassAndTypedValues() throws {
+        let boolean = makePatch(
+            index: 60,
+            selector: "featureEnabled",
+            action: .returnBoolean(false),
+            advanced: PatchAdvancedConfiguration(
+                beforeEffects: [
+                    .customObjectiveC(PatchCustomObjectiveC(source: "NSLog(@\"patched\");"))
+                ],
+                invocationCounter: PatchInvocationCounter(logEachInvocation: false)
+            ),
+            runtimeControl: PatchRuntimeControlConfiguration(
+                title: "Feature Enabled",
+                defaultEnabled: false,
+                order: 0,
+                value: .boolean(true)
+            )
+        )
+        let signed = makePatch(
+            index: 61,
+            selector: "signedValue",
+            encoding: "c@:",
+            action: .returnSignedInteger(1),
+            runtimeControl: PatchRuntimeControlConfiguration(
+                title: "Signed Value",
+                order: 1,
+                value: .signedInteger(
+                    PatchRuntimeSignedIntegerConfiguration(defaultValue: -7)
+                )
+            )
+        )
+        let unsigned = makePatch(
+            index: 62,
+            selector: "unsignedValue",
+            encoding: "C@:",
+            action: .callOriginalAndReplace(.unsignedInteger(1)),
+            runtimeControl: PatchRuntimeControlConfiguration(
+                title: "Unsigned Value",
+                order: 2,
+                value: .unsignedInteger(
+                    PatchRuntimeUnsignedIntegerConfiguration(defaultValue: 9)
+                )
+            )
+        )
+        let source = try generate(
+            makeProject(
+                runtimeControls: PatchRuntimeControlsConfiguration(
+                    id: uuid(100),
+                    activationMode: .both
+                ),
+                patches: [boolean, signed, unsigned]
+            )
+        )
+
+        XCTAssertTrue(source.contains("#import <UIKit/UIKit.h>"))
+        XCTAssertTrue(source.contains("static BOOL MPRuntimeControlsMasterEnabled = YES;"))
+        XCTAssertTrue(
+            source.contains(
+                "static BOOL MPPatch_0_FixtureManager_featureEnabled_ControlEnabled = NO;")
+        )
+        XCTAssertTrue(
+            source.contains(
+                "static BOOL MPPatch_0_FixtureManager_featureEnabled_ControlValue = YES;")
+        )
+        XCTAssertTrue(
+            source.contains(
+                "static int64_t MPPatch_1_FixtureManager_signedValue_ControlValue = -7LL;")
+        )
+        XCTAssertTrue(
+            source.contains(
+                "static uint64_t MPPatch_2_FixtureManager_unsignedValue_ControlValue = 9ULL;")
+        )
+        XCTAssertTrue(
+            source.contains(
+                "BOOL runtimeControlEnabled = __atomic_load_n(&MPRuntimeControlsMasterEnabled"
+            )
+        )
+        XCTAssertTrue(source.contains("if (!runtimeControlEnabled)"))
+        XCTAssertTrue(source.contains("return MPPatch_0_FixtureManager_featureEnabled_Original"))
+        XCTAssertTrue(source.contains("BOOL runtimeControlValue = __atomic_load_n"))
+        XCTAssertTrue(source.contains("return runtimeControlValue;"))
+        XCTAssertTrue(source.contains("return (signed char)runtimeControlValue;"))
+        XCTAssertTrue(source.contains("return (unsigned char)runtimeControlValue;"))
+        XCTAssertTrue(source.contains("static const BOOL MPConfiguredShowsButton = YES;"))
+        XCTAssertTrue(source.contains("static const BOOL MPConfiguredInstallsGesture = YES;"))
+        XCTAssertTrue(source.contains("gesture.minimumPressDuration = 3.0;"))
+        XCTAssertTrue(source.contains("gestureRecognizer.numberOfTouches == 3"))
+        XCTAssertTrue(source.contains("gesture.cancelsTouchesInView = NO;"))
+        XCTAssertTrue(source.contains("if (UIAccessibilityIsVoiceOverRunning())"))
+        XCTAssertTrue(source.contains("self.buttonHiddenForSession = NO;"))
+        XCTAssertTrue(source.contains("self.buttonPanGesture.enabled = !forceAccessibleButton;"))
+        XCTAssertTrue(source.contains("[window removeGestureRecognizer:self.activationGesture]"))
+
+        let bypass = try XCTUnwrap(source.range(of: "if (!runtimeControlEnabled)"))
+        let counter = try XCTUnwrap(source.range(of: "__atomic_add_fetch"))
+        let effect = try XCTUnwrap(source.range(of: "NSLog(@\"patched\")"))
+        XCTAssertLessThan(bypass.lowerBound, counter.lowerBound)
+        XCTAssertLessThan(bypass.lowerBound, effect.lowerBound)
+    }
+
+    func testRuntimeControlsSourceLinksDeviceDylibWithWarningsAsErrors() throws {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/xcrun") else {
+            throw XCTSkip("xcrun is unavailable")
+        }
+        let patch = makePatch(
+            index: 70,
+            selector: "featureEnabled",
+            action: .returnBoolean(true),
+            runtimeControl: PatchRuntimeControlConfiguration(
+                title: "Feature Enabled",
+                persistence: .acrossLaunches,
+                order: 0,
+                value: .boolean(false)
+            )
+        )
+        let project = makeProject(
+            runtimeControls: PatchRuntimeControlsConfiguration(
+                id: uuid(101),
+                activationMode: .both
+            ),
+            patches: [patch]
+        )
+        let workspace = FileManager.default.temporaryDirectory.appending(
+            path: "MachPatch-RuntimeControlsCompile-\(UUID().uuidString)",
+            directoryHint: .isDirectory
+        )
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let bundle = try ObjectiveCSourceGenerator().generate(project)
+        let sourceURL = try XCTUnwrap(GeneratedSourceWriter.write(bundle, to: workspace).first)
+        let dylibURL = workspace.appending(path: "RuntimeControls.dylib")
+
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(filePath: "/usr/bin/xcrun")
+        process.arguments = [
+            "--sdk", "iphoneos", "clang",
+            "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror",
+            "-dynamiclib", "-arch", "arm64", "-miphoneos-version-min=15.0",
+            "-framework", "Foundation", "-framework", "UIKit",
+            "-framework", "CoreGraphics",
+            "-Wl,-install_name,@rpath/RuntimeControls.dylib",
+            "-x", "objective-c", sourceURL.path, "-o", dylibURL.path,
+        ]
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+
+        let diagnostics = String(
+            decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self
+        )
+        XCTAssertEqual(process.terminationStatus, 0, diagnostics)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dylibURL.path), diagnostics)
+    }
+
     func testGeneratesFloatingPointClassAndSelectorFamilies() throws {
         let floating = makePatch(
             index: 30,
@@ -787,7 +942,10 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
         ]
     }
 
-    private func makeProject(patches: [MethodPatch]? = nil) -> PatchProject {
+    private func makeProject(
+        runtimeControls: PatchRuntimeControlsConfiguration? = nil,
+        patches: [MethodPatch]? = nil
+    ) -> PatchProject {
         PatchProject(
             projectName: "Generator Fixture",
             target: PatchTargetIdentity(
@@ -803,6 +961,7 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
                 outputName: "GeneratorFixture",
                 enableARC: true
             ),
+            runtimeControls: runtimeControls,
             patches: patches ?? [makePatch(index: 0)]
         )
     }
@@ -814,7 +973,8 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
         methodKind: ObjectiveCMethodKind = .instance,
         encoding: String = "B@:",
         action: PatchAction = .returnBoolean(true),
-        advanced: PatchAdvancedConfiguration? = nil
+        advanced: PatchAdvancedConfiguration? = nil,
+        runtimeControl: PatchRuntimeControlConfiguration? = nil
     ) -> MethodPatch {
         MethodPatch(
             id: uuid(index + 1),
@@ -824,7 +984,8 @@ final class ObjectiveCSourceGeneratorTests: XCTestCase {
             methodKind: methodKind,
             expectedTypeEncoding: encoding,
             action: action,
-            advanced: advanced
+            advanced: advanced,
+            runtimeControl: runtimeControl
         )
     }
 

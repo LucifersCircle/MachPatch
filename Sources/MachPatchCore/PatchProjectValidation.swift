@@ -41,6 +41,11 @@ public enum PatchProjectValidationCode: String, Codable, Equatable, Sendable {
     case invalidSelectedImageSHA256
     case invalidMinimumIOSVersion
     case invalidOutputName
+    case invalidRuntimeControlsID
+    case missingRuntimeControlsConfiguration
+    case invalidRuntimeControlTitle
+    case invalidRuntimeControlOrder
+    case incompatibleRuntimeControl
     case invalidPatchID
     case duplicatePatchID
     case duplicatePatchTarget
@@ -143,6 +148,26 @@ public enum PatchProjectValidator {
                 issue(
                     .invalidOutputName,
                     "Build output name must contain only letters, numbers, '.', '-', or '_'."
+                )
+            )
+        }
+        if let runtimeControls = project.runtimeControls,
+            UUID(uuidString: runtimeControls.id) == nil
+        {
+            errors.append(
+                issue(
+                    .invalidRuntimeControlsID,
+                    "Runtime controls namespace is not a UUID."
+                )
+            )
+        }
+        if project.runtimeControls == nil,
+            project.patches.contains(where: { $0.runtimeControl != nil })
+        {
+            errors.append(
+                issue(
+                    .missingRuntimeControlsConfiguration,
+                    "Exposed patches require a project runtime-controls configuration."
                 )
             )
         }
@@ -254,6 +279,38 @@ public enum PatchProjectValidator {
                     patchID: patch.id
                 )
             )
+        }
+        if let runtimeControl = patch.runtimeControl {
+            if isBlank(runtimeControl.title) || runtimeControl.title.utf8.count > 128
+                || runtimeControl.title.contains(where: \.isNewline)
+                || containsRuntimeNameControlCharacter(runtimeControl.title)
+            {
+                errors.append(
+                    issue(
+                        .invalidRuntimeControlTitle,
+                        "Runtime control titles must contain 1 through 128 UTF-8 bytes without newlines or control characters.",
+                        patchID: patch.id
+                    )
+                )
+            }
+            if runtimeControl.order < 0 {
+                errors.append(
+                    issue(
+                        .invalidRuntimeControlOrder,
+                        "Runtime control order must not be negative.",
+                        patchID: patch.id
+                    )
+                )
+            }
+            if let value = runtimeControl.value,
+                let message = PatchRuntimeControlCompatibility.incompatibility(
+                    value: value,
+                    action: patch.action,
+                    signature: signature
+                )
+            {
+                errors.append(issue(.incompatibleRuntimeControl, message, patchID: patch.id))
+            }
         }
         return errors
     }

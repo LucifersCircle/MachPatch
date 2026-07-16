@@ -946,6 +946,56 @@ final class WorkspaceModel: ObservableObject {
         replaceProjectDraft(projectDraft)
     }
 
+    func setRuntimeControlExposed(_ exposed: Bool, for patch: MethodPatch) {
+        guard var projectDraft,
+            projectDraft.patches.contains(where: { $0.id == patch.id })
+        else { return }
+
+        if exposed {
+            guard patch.runtimeControl == nil else { return }
+            if projectDraft.runtimeControls == nil {
+                projectDraft.runtimeControls = PatchRuntimeControlsConfiguration(
+                    id: UUID().uuidString
+                )
+            }
+            let nextOrder =
+                (projectDraft.patches.compactMap { $0.runtimeControl?.order }.max() ?? -1) + 1
+            projectDraft.updatePatch(
+                patch.replacingRuntimeControl(
+                    PatchRuntimeControlConfiguration(
+                        title: patch.selector,
+                        order: nextOrder
+                    )
+                )
+            )
+        } else {
+            guard patch.runtimeControl != nil else { return }
+            projectDraft.updatePatch(patch.replacingRuntimeControl(nil))
+        }
+        replaceProjectDraft(projectDraft)
+    }
+
+    func updateRuntimeControl(
+        for patch: MethodPatch,
+        configuration: PatchRuntimeControlConfiguration
+    ) {
+        guard var projectDraft, projectDraft.runtimeControls != nil,
+            projectDraft.patches.contains(where: { $0.id == patch.id })
+        else { return }
+        projectDraft.updatePatch(patch.replacingRuntimeControl(configuration))
+        replaceProjectDraft(projectDraft)
+    }
+
+    func updateRuntimeControlActivationMode(_ activationMode: PatchRuntimeControlActivationMode) {
+        updateProjectDraft { draft in
+            guard let configuration = draft.runtimeControls else { return }
+            draft.runtimeControls = PatchRuntimeControlsConfiguration(
+                id: configuration.id,
+                activationMode: activationMode
+            )
+        }
+    }
+
     func removePatch(id: String) {
         guard var projectDraft else { return }
         projectDraft.removePatch(id: id)

@@ -18,7 +18,10 @@ public struct ObjectiveCSourceGenerator: Sendable {
             )
             return try PatchGenerationContext(index: index, patch: patch, signature: signature)
         }
-        let source = SourceRenderer(contexts: contexts).render()
+        let source = SourceRenderer(
+            contexts: contexts,
+            runtimeControls: project.runtimeControls
+        ).render()
         return GeneratedSourceBundle(files: [
             GeneratedSourceFile(
                 relativePath: MachPatchGenerator.generatedSourceFileName,
@@ -76,9 +79,11 @@ private struct PatchGenerationContext {
     var installName: String { "\(identifier)_Install" }
     var stateName: String { "\(identifier)_State" }
     var counterName: String { "\(identifier)_InvocationCounter" }
+    var controlEnabledName: String { "\(identifier)_ControlEnabled" }
+    var controlValueName: String { "\(identifier)_ControlValue" }
     var advanced: PatchAdvancedConfiguration { patch.advanced ?? PatchAdvancedConfiguration() }
     var needsOriginalImplementation: Bool {
-        patch.action.callsOriginal
+        patch.action.callsOriginal || patch.runtimeControl != nil
     }
 
     var needsInvocationCounter: Bool {
@@ -86,18 +91,20 @@ private struct PatchGenerationContext {
     }
 
     var needsUIKit: Bool {
-        (advanced.beforeEffects + advanced.afterEffects).contains { effect in
-            switch effect {
-            case .showAlert, .customObjectiveC: true
+        patch.runtimeControl != nil
+            || (advanced.beforeEffects + advanced.afterEffects).contains { effect in
+                switch effect {
+                case .showAlert, .customObjectiveC: true
+                }
             }
-        }
     }
 
     var needsAlertRuntime: Bool {
-        (advanced.beforeEffects + advanced.afterEffects).contains { effect in
-            if case .showAlert = effect { return true }
-            return false
-        }
+        patch.runtimeControl != nil
+            || (advanced.beforeEffects + advanced.afterEffects).contains { effect in
+                if case .showAlert = effect { return true }
+                return false
+            }
     }
 
     var needsCoreGraphics: Bool {
@@ -179,13 +186,20 @@ private enum ObjectiveCTypeMapper {
 
 private struct SourceRenderer {
     let contexts: [PatchGenerationContext]
+    let runtimeControls: PatchRuntimeControlsConfiguration?
 
     func render() -> String {
         var sections: [String] = [header]
+        if !runtimeControlState.isEmpty {
+            sections.append(runtimeControlState)
+        }
         if contexts.contains(where: \.needsAlertRuntime) {
             sections.append(alertRuntime)
         }
         sections.append(contexts.map(renderPatch).joined(separator: "\n\n"))
+        if !runtimeControlRuntime.isEmpty {
+            sections.append(runtimeControlRuntime)
+        }
         sections.append(renderInstallationCoordinator())
         sections.append(renderConstructor())
         return sections.filter { !$0.isEmpty }.joined(separator: "\n\n") + "\n"
@@ -201,6 +215,9 @@ private struct SourceRenderer {
             #import <objc/runtime.h>
             #include <string.h>
             """
+        if runtimeControls != nil {
+            imports += "\n#include <stdint.h>"
+        }
         if contexts.contains(where: \.needsUIKit) {
             imports += "\n#import <UIKit/UIKit.h>"
         }
@@ -218,65 +235,1339 @@ private struct SourceRenderer {
             """
     }
 
-    private var alertRuntime: String {
-        """
-        static UIViewController *MPTopViewController(UIViewController *controller) {
-            if (controller == nil) { return nil; }
-            if (controller.presentedViewController != nil) {
-                return MPTopViewController(controller.presentedViewController);
-            }
-            if ([controller isKindOfClass:[UINavigationController class]]) {
-                return MPTopViewController(((UINavigationController *)controller).visibleViewController);
-            }
-            if ([controller isKindOfClass:[UITabBarController class]]) {
-                return MPTopViewController(((UITabBarController *)controller).selectedViewController);
-            }
-            return controller;
-        }
+    private var runtimeControlState: String {
+        guard contexts.contains(where: { $0.patch.runtimeControl != nil }) else { return "" }
+        return "static BOOL MPRuntimeControlsMasterEnabled = YES;"
+    }
 
-        static void MPShowAlert(NSString *title, NSString *message, NSString *buttonTitle) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                UIApplication *application = UIApplication.sharedApplication;
-                UIWindow *window = nil;
-                if (@available(iOS 13.0, *)) {
-                    for (UIScene *scene in application.connectedScenes) {
-                        if (scene.activationState != UISceneActivationStateForegroundActive ||
-                            ![scene isKindOfClass:[UIWindowScene class]]) {
-                            continue;
+    private var controlledContexts: [PatchGenerationContext] {
+        contexts.filter { $0.patch.runtimeControl != nil }.sorted { lhs, rhs in
+            let lhsOrder = lhs.patch.runtimeControl?.order ?? 0
+            let rhsOrder = rhs.patch.runtimeControl?.order ?? 0
+            return lhsOrder == rhsOrder ? lhs.index < rhs.index : lhsOrder < rhsOrder
+        }
+    }
+
+    private var runtimeControlRuntime: String {
+        guard let runtimeControls, !controlledContexts.isEmpty else { return "" }
+        let entries = controlledContexts.map(runtimeControlDescriptorEntry).joined(separator: ",\n")
+        return """
+            typedef NS_ENUM(uint8_t, MPRuntimeControlKind) {
+                MPRuntimeControlKindToggle = 0,
+                MPRuntimeControlKindBoolean = 1,
+                MPRuntimeControlKindSignedInteger = 2,
+                MPRuntimeControlKindUnsignedInteger = 3,
+            };
+
+            typedef struct {
+                __unsafe_unretained NSString *identifier;
+                __unsafe_unretained NSString *title;
+                __unsafe_unretained NSString *methodDescription;
+                BOOL *enabledStorage;
+                BOOL defaultEnabled;
+                BOOL persistent;
+                MPRuntimeControlKind kind;
+                void *valueStorage;
+                BOOL defaultBoolean;
+                int64_t defaultSigned;
+                int64_t signedMinimum;
+                int64_t signedMaximum;
+                int64_t signedStep;
+                uint64_t defaultUnsigned;
+                uint64_t unsignedMinimum;
+                uint64_t unsignedMaximum;
+                uint64_t unsignedStep;
+                MPPatchState *patchState;
+            } MPRuntimeControlDescriptor;
+
+            static MPRuntimeControlDescriptor MPRuntimeControlDescriptors[] = {
+            \(indent(entries, spaces: 4))
+            };
+
+            static NSUInteger MPRuntimeControlCount(void) {
+                return sizeof(MPRuntimeControlDescriptors) / sizeof(MPRuntimeControlDescriptors[0]);
+            }
+
+            static NSString *MPRuntimeControlPersistenceKey(
+                const MPRuntimeControlDescriptor *descriptor,
+                NSString *suffix
+            ) {
+                return [NSString stringWithFormat:
+                    @"com.machpatch.runtime.%@.%@.%@",
+                    \(ObjectiveCLiteral.string(runtimeControls.id)),
+                    descriptor->identifier,
+                    suffix];
+            }
+
+            static void MPLoadPersistedRuntimeControls(void) {
+                NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+                for (NSUInteger index = 0; index < MPRuntimeControlCount(); index += 1) {
+                    MPRuntimeControlDescriptor *descriptor = &MPRuntimeControlDescriptors[index];
+                    if (!descriptor->persistent) { continue; }
+
+                    id enabled = [defaults objectForKey:
+                        MPRuntimeControlPersistenceKey(descriptor, @"enabled")];
+                    if ([enabled isKindOfClass:[NSNumber class]]) {
+                        __atomic_store_n(
+                            descriptor->enabledStorage,
+                            ((NSNumber *)enabled).boolValue,
+                            __ATOMIC_RELEASE
+                        );
+                    }
+
+                    id storedValue = [defaults objectForKey:
+                        MPRuntimeControlPersistenceKey(descriptor, @"value")];
+                    switch (descriptor->kind) {
+                    case MPRuntimeControlKindBoolean:
+                        if ([storedValue isKindOfClass:[NSNumber class]]) {
+                            __atomic_store_n(
+                                (BOOL *)descriptor->valueStorage,
+                                ((NSNumber *)storedValue).boolValue,
+                                __ATOMIC_RELEASE
+                            );
                         }
-                        for (UIWindow *candidate in ((UIWindowScene *)scene).windows) {
-                            if (candidate.isKeyWindow) {
-                                window = candidate;
-                                break;
+                        break;
+                    case MPRuntimeControlKindSignedInteger:
+                        if ([storedValue isKindOfClass:[NSString class]]) {
+                            NSScanner *scanner = [NSScanner scannerWithString:(NSString *)storedValue];
+                            long long parsed = 0;
+                            if ([scanner scanLongLong:&parsed] && scanner.isAtEnd
+                                && parsed >= descriptor->signedMinimum
+                                && parsed <= descriptor->signedMaximum) {
+                                __atomic_store_n(
+                                    (int64_t *)descriptor->valueStorage,
+                                    (int64_t)parsed,
+                                    __ATOMIC_RELEASE
+                                );
                             }
                         }
-                        if (window != nil) { break; }
+                        break;
+                    case MPRuntimeControlKindUnsignedInteger:
+                        if ([storedValue isKindOfClass:[NSString class]]
+                            && ![(NSString *)storedValue hasPrefix:@"-"]) {
+                            NSScanner *scanner = [NSScanner scannerWithString:(NSString *)storedValue];
+                            unsigned long long parsed = 0;
+                            if ([scanner scanUnsignedLongLong:&parsed] && scanner.isAtEnd
+                                && parsed >= descriptor->unsignedMinimum
+                                && parsed <= descriptor->unsignedMaximum) {
+                                __atomic_store_n(
+                                    (uint64_t *)descriptor->valueStorage,
+                                    (uint64_t)parsed,
+                                    __ATOMIC_RELEASE
+                                );
+                            }
+                        }
+                        break;
+                    case MPRuntimeControlKindToggle:
+                        break;
                     }
                 }
-                if (window == nil) {
-                    window = [application valueForKey:@"keyWindow"];
+            }
+
+            \(runtimeControlOverlaySource)
+
+            static void MPInitializeRuntimeControls(void) {
+                MPLoadPersistedRuntimeControls();
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [[MPRuntimeControlsManager sharedManager] start];
+                });
+            }
+            """
+    }
+
+    private var runtimeControlOverlaySource: String {
+        guard let runtimeControls else { return "" }
+        let classSuffix = ObjectiveCIdentifier.sanitize(runtimeControls.id)
+        let showsButton = runtimeControls.activationMode != .threeFingerHold
+        let installsGesture = runtimeControls.activationMode != .floatingButton
+        return """
+            #define MPRuntimeControlsOverlay MPControls_\(classSuffix)_Overlay
+            #define MPRuntimeControlsManager MPControls_\(classSuffix)_Manager
+
+            static const BOOL MPConfiguredShowsButton = \(showsButton ? "YES" : "NO");
+            static const BOOL MPConfiguredInstallsGesture = \(installsGesture ? "YES" : "NO");
+            static BOOL MPVoiceOverFallbackForSession = NO;
+
+            static UIColor *MPPrimaryLabelColor(void) {
+                if (@available(iOS 13.0, *)) { return UIColor.labelColor; }
+                return UIColor.whiteColor;
+            }
+
+            static UIColor *MPSecondaryLabelColor(void) {
+                if (@available(iOS 13.0, *)) { return UIColor.secondaryLabelColor; }
+                return [UIColor colorWithWhite:1.0 alpha:0.7];
+            }
+
+            static UIColor *MPControlBackgroundColor(void) {
+                if (@available(iOS 13.0, *)) { return UIColor.tertiarySystemFillColor; }
+                return [UIColor colorWithWhite:1.0 alpha:0.12];
+            }
+
+            static UIColor *MPAccentColor(void) {
+                if (@available(iOS 13.0, *)) { return UIColor.systemPurpleColor; }
+                return UIColor.purpleColor;
+            }
+
+            static UIColor *MPErrorColor(void) {
+                if (@available(iOS 13.0, *)) { return UIColor.systemRedColor; }
+                return UIColor.redColor;
+            }
+
+            static void MPPersistRuntimeControlObject(
+                const MPRuntimeControlDescriptor *descriptor,
+                NSString *suffix,
+                id value
+            ) {
+                if (!descriptor->persistent) { return; }
+                NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+                NSString *key = MPRuntimeControlPersistenceKey(descriptor, suffix);
+                if (value == nil) {
+                    [defaults removeObjectForKey:key];
+                } else {
+                    [defaults setObject:value forKey:key];
                 }
-                UIViewController *presenter = MPTopViewController(window.rootViewController);
-                if (presenter == nil) {
-                    NSLog(@"[MachPatch] Could not present alert because no active view controller was found.");
+            }
+
+            static BOOL MPRuntimeControlIsEnabled(NSUInteger index) {
+                return __atomic_load_n(
+                    MPRuntimeControlDescriptors[index].enabledStorage,
+                    __ATOMIC_ACQUIRE
+                );
+            }
+
+            static void MPSetRuntimeControlEnabled(NSUInteger index, BOOL enabled) {
+                MPRuntimeControlDescriptor *descriptor = &MPRuntimeControlDescriptors[index];
+                __atomic_store_n(descriptor->enabledStorage, enabled, __ATOMIC_RELEASE);
+                MPPersistRuntimeControlObject(
+                    descriptor,
+                    @"enabled",
+                    [NSNumber numberWithBool:enabled]
+                );
+            }
+
+            static BOOL MPRuntimeControlBooleanValue(NSUInteger index) {
+                return __atomic_load_n(
+                    (BOOL *)MPRuntimeControlDescriptors[index].valueStorage,
+                    __ATOMIC_ACQUIRE
+                );
+            }
+
+            static void MPSetRuntimeControlBooleanValue(NSUInteger index, BOOL value) {
+                MPRuntimeControlDescriptor *descriptor = &MPRuntimeControlDescriptors[index];
+                __atomic_store_n((BOOL *)descriptor->valueStorage, value, __ATOMIC_RELEASE);
+                MPPersistRuntimeControlObject(
+                    descriptor,
+                    @"value",
+                    [NSNumber numberWithBool:value]
+                );
+            }
+
+            static int64_t MPRuntimeControlSignedValue(NSUInteger index) {
+                return __atomic_load_n(
+                    (int64_t *)MPRuntimeControlDescriptors[index].valueStorage,
+                    __ATOMIC_ACQUIRE
+                );
+            }
+
+            static BOOL MPSetRuntimeControlSignedValue(NSUInteger index, int64_t value) {
+                MPRuntimeControlDescriptor *descriptor = &MPRuntimeControlDescriptors[index];
+                if (value < descriptor->signedMinimum || value > descriptor->signedMaximum) {
+                    return NO;
+                }
+                __atomic_store_n((int64_t *)descriptor->valueStorage, value, __ATOMIC_RELEASE);
+                MPPersistRuntimeControlObject(
+                    descriptor,
+                    @"value",
+                    [NSString stringWithFormat:@"%lld", (long long)value]
+                );
+                return YES;
+            }
+
+            static uint64_t MPRuntimeControlUnsignedValue(NSUInteger index) {
+                return __atomic_load_n(
+                    (uint64_t *)MPRuntimeControlDescriptors[index].valueStorage,
+                    __ATOMIC_ACQUIRE
+                );
+            }
+
+            static BOOL MPSetRuntimeControlUnsignedValue(NSUInteger index, uint64_t value) {
+                MPRuntimeControlDescriptor *descriptor = &MPRuntimeControlDescriptors[index];
+                if (value < descriptor->unsignedMinimum || value > descriptor->unsignedMaximum) {
+                    return NO;
+                }
+                __atomic_store_n((uint64_t *)descriptor->valueStorage, value, __ATOMIC_RELEASE);
+                MPPersistRuntimeControlObject(
+                    descriptor,
+                    @"value",
+                    [NSString stringWithFormat:@"%llu", (unsigned long long)value]
+                );
+                return YES;
+            }
+
+            static void MPResetRuntimeControlsToDefaults(void) {
+                NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+                for (NSUInteger index = 0; index < MPRuntimeControlCount(); index += 1) {
+                    MPRuntimeControlDescriptor *descriptor = &MPRuntimeControlDescriptors[index];
+                    __atomic_store_n(
+                        descriptor->enabledStorage,
+                        descriptor->defaultEnabled,
+                        __ATOMIC_RELEASE
+                    );
+                    switch (descriptor->kind) {
+                    case MPRuntimeControlKindBoolean:
+                        __atomic_store_n(
+                            (BOOL *)descriptor->valueStorage,
+                            descriptor->defaultBoolean,
+                            __ATOMIC_RELEASE
+                        );
+                        break;
+                    case MPRuntimeControlKindSignedInteger:
+                        __atomic_store_n(
+                            (int64_t *)descriptor->valueStorage,
+                            descriptor->defaultSigned,
+                            __ATOMIC_RELEASE
+                        );
+                        break;
+                    case MPRuntimeControlKindUnsignedInteger:
+                        __atomic_store_n(
+                            (uint64_t *)descriptor->valueStorage,
+                            descriptor->defaultUnsigned,
+                            __ATOMIC_RELEASE
+                        );
+                        break;
+                    case MPRuntimeControlKindToggle:
+                        break;
+                    }
+                    [defaults removeObjectForKey:
+                        MPRuntimeControlPersistenceKey(descriptor, @"enabled")];
+                    [defaults removeObjectForKey:
+                        MPRuntimeControlPersistenceKey(descriptor, @"value")];
+                }
+            }
+
+            static UILabel *MPMakeRuntimeLabel(
+                UIFont *font,
+                UIColor *color,
+                NSInteger numberOfLines
+            ) {
+                UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
+                label.font = font;
+                label.textColor = color;
+                label.numberOfLines = numberOfLines;
+                return label;
+            }
+
+            @class MPRuntimeControlsOverlay;
+
+            @interface MPRuntimeControlsManager : NSObject
+            @property(nonatomic, strong) NSMapTable<UIWindow *, MPRuntimeControlsOverlay *> *overlays;
+            @property(nonatomic, assign) BOOL started;
+            + (instancetype)sharedManager;
+            - (void)start;
+            - (void)refreshWindows;
+            - (void)refreshAllControls;
+            @end
+
+            @interface MPRuntimeControlsOverlay : NSObject <
+                UIGestureRecognizerDelegate,
+                UITextFieldDelegate
+            >
+            @property(nonatomic, weak) UIWindow *window;
+            @property(nonatomic, strong) UIButton *button;
+            @property(nonatomic, strong) UIVisualEffectView *panel;
+            @property(nonatomic, strong) UIStackView *panelStack;
+            @property(nonatomic, strong) UILabel *summaryLabel;
+            @property(nonatomic, strong) UISwitch *masterSwitch;
+            @property(nonatomic, strong) UIButton *showButtonButton;
+            @property(nonatomic, strong) UIPanGestureRecognizer *buttonPanGesture;
+            @property(nonatomic, strong) UILongPressGestureRecognizer *buttonLongPressGesture;
+            @property(nonatomic, strong) UILongPressGestureRecognizer *activationGesture;
+            @property(nonatomic, strong) NSMutableDictionary<NSNumber *, UISwitch *> *switches;
+            @property(nonatomic, strong)
+                NSMutableDictionary<NSNumber *, UISegmentedControl *> *booleanControls;
+            @property(nonatomic, strong) NSMutableDictionary<NSNumber *, UITextField *> *integerFields;
+            @property(nonatomic, strong) NSMutableDictionary<NSNumber *, UILabel *> *statusLabels;
+            @property(nonatomic, assign) BOOL panelVisible;
+            @property(nonatomic, assign) BOOL buttonHiddenForSession;
+            @property(nonatomic, assign) BOOL hasButtonPosition;
+            @property(nonatomic, assign) CGPoint buttonCenter;
+            - (instancetype)initWithWindow:(UIWindow *)window;
+            - (void)updateEntryPoints;
+            - (void)layoutControls;
+            - (void)refreshControls;
+            - (void)invalidate;
+            @end
+
+            @implementation MPRuntimeControlsOverlay
+
+            - (instancetype)initWithWindow:(UIWindow *)window {
+                self = [super init];
+                if (self != nil) {
+                    _window = window;
+                    _switches = [NSMutableDictionary dictionary];
+                    _booleanControls = [NSMutableDictionary dictionary];
+                    _integerFields = [NSMutableDictionary dictionary];
+                    _statusLabels = [NSMutableDictionary dictionary];
+                    [self updateEntryPoints];
+                }
+                return self;
+            }
+
+            - (UIButton *)makeButton {
+                UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+                button.frame = CGRectMake(0.0, 0.0, 52.0, 52.0);
+                button.backgroundColor = MPAccentColor();
+                button.tintColor = UIColor.whiteColor;
+                button.layer.cornerRadius = 26.0;
+                button.layer.shadowColor = UIColor.blackColor.CGColor;
+                button.layer.shadowOpacity = 0.28;
+                button.layer.shadowRadius = 8.0;
+                button.layer.shadowOffset = CGSizeMake(0.0, 3.0);
+                if (@available(iOS 13.0, *)) {
+                    UIImageSymbolConfiguration *configuration =
+                        [UIImageSymbolConfiguration configurationWithPointSize:22.0
+                            weight:UIImageSymbolWeightSemibold];
+                    UIImage *image = [UIImage systemImageNamed:@"hammer.fill"
+                        withConfiguration:configuration];
+                    [button setImage:image forState:UIControlStateNormal];
+                } else {
+                    [button setTitle:@"M" forState:UIControlStateNormal];
+                    button.titleLabel.font = [UIFont boldSystemFontOfSize:20.0];
+                }
+                button.accessibilityLabel = @"MachPatch controls";
+                button.accessibilityHint = @"Opens patch controls. Drag to reposition.";
+                [button addTarget:self
+                    action:@selector(buttonTapped:)
+                    forControlEvents:UIControlEventTouchUpInside];
+
+                UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc]
+                    initWithTarget:self
+                    action:@selector(buttonPanned:)];
+                [button addGestureRecognizer:pan];
+                self.buttonPanGesture = pan;
+                UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc]
+                    initWithTarget:self
+                    action:@selector(buttonLongPressed:)];
+                longPress.minimumPressDuration = 0.7;
+                [button addGestureRecognizer:longPress];
+                self.buttonLongPressGesture = longPress;
+                return button;
+            }
+
+            - (void)updateEntryPoints {
+                UIWindow *window = self.window;
+                if (window == nil) { return; }
+                BOOL forceAccessibleButton = MPVoiceOverFallbackForSession
+                    || UIAccessibilityIsVoiceOverRunning();
+                if (forceAccessibleButton) {
+                    self.buttonHiddenForSession = NO;
+                }
+                BOOL shouldShowButton = MPConfiguredShowsButton || forceAccessibleButton;
+                if (shouldShowButton && self.button == nil) {
+                    self.button = [self makeButton];
+                    [window addSubview:self.button];
+                }
+                self.button.hidden = !shouldShowButton || self.buttonHiddenForSession;
+                self.buttonPanGesture.enabled = !forceAccessibleButton;
+                self.buttonLongPressGesture.enabled = !forceAccessibleButton;
+
+                BOOL shouldInstallGesture = MPConfiguredInstallsGesture
+                    && !forceAccessibleButton;
+                if (shouldInstallGesture && self.activationGesture == nil) {
+                    UILongPressGestureRecognizer *gesture = [[UILongPressGestureRecognizer alloc]
+                        initWithTarget:self
+                        action:@selector(activationGestureRecognized:)];
+                    gesture.minimumPressDuration = 3.0;
+                    gesture.cancelsTouchesInView = NO;
+                    gesture.delaysTouchesBegan = NO;
+                    gesture.delegate = self;
+                    [window addGestureRecognizer:gesture];
+                    self.activationGesture = gesture;
+                } else if (!shouldInstallGesture && self.activationGesture != nil) {
+                    [window removeGestureRecognizer:self.activationGesture];
+                    self.activationGesture = nil;
+                }
+                [self layoutControls];
+                if (self.button != nil) { [window bringSubviewToFront:self.button]; }
+                if (self.panelVisible && self.panel != nil) {
+                    [window bringSubviewToFront:self.panel];
+                }
+            }
+
+            - (CGRect)safeRect {
+                UIWindow *window = self.window;
+                if (window == nil) { return CGRectZero; }
+                CGRect safe = UIEdgeInsetsInsetRect(window.bounds, window.safeAreaInsets);
+                safe = CGRectInset(safe, 12.0, 12.0);
+                if (safe.size.width < 100.0 || safe.size.height < 100.0) {
+                    safe = CGRectInset(window.bounds, 12.0, 12.0);
+                }
+                return safe;
+            }
+
+            - (void)layoutControls {
+                UIWindow *window = self.window;
+                if (window == nil) { return; }
+                CGRect safe = [self safeRect];
+                if (self.button != nil) {
+                    if (!self.hasButtonPosition) {
+                        self.buttonCenter = CGPointMake(
+                            CGRectGetMaxX(safe) - 26.0,
+                            CGRectGetMidY(safe)
+                        );
+                        self.hasButtonPosition = YES;
+                    }
+                    CGFloat minimumX = CGRectGetMinX(safe) + 26.0;
+                    CGFloat maximumX = CGRectGetMaxX(safe) - 26.0;
+                    CGFloat minimumY = CGRectGetMinY(safe) + 26.0;
+                    CGFloat maximumY = CGRectGetMaxY(safe) - 26.0;
+                    self.buttonCenter = CGPointMake(
+                        MIN(MAX(self.buttonCenter.x, minimumX), maximumX),
+                        MIN(MAX(self.buttonCenter.y, minimumY), maximumY)
+                    );
+                    self.button.center = self.buttonCenter;
+                }
+                if (self.panelVisible && self.panel != nil) {
+                    CGFloat width = MIN(330.0, MAX(240.0, safe.size.width - 24.0));
+                    self.panel.frame = CGRectMake(0.0, 0.0, width, 200.0);
+                    [self.panel.contentView layoutIfNeeded];
+                    CGFloat contentHeight = [self.panelStack
+                        systemLayoutSizeFittingSize:UILayoutFittingCompressedSize].height + 24.0;
+                    CGFloat maximumHeight = MAX(180.0, safe.size.height * 0.70);
+                    CGFloat height = MIN(MAX(180.0, contentHeight), maximumHeight);
+                    CGFloat x = CGRectGetMidX(safe) - width / 2.0;
+                    CGFloat y = CGRectGetMidY(safe) - height / 2.0;
+                    if (self.button != nil && !self.button.hidden) {
+                        BOOL buttonOnRight = self.buttonCenter.x >= CGRectGetMidX(safe);
+                        x = buttonOnRight
+                            ? CGRectGetMinX(self.button.frame) - width - 12.0
+                            : CGRectGetMaxX(self.button.frame) + 12.0;
+                        y = self.buttonCenter.y - height / 2.0;
+                    }
+                    x = MIN(MAX(x, CGRectGetMinX(safe)), CGRectGetMaxX(safe) - width);
+                    y = MIN(MAX(y, CGRectGetMinY(safe)), CGRectGetMaxY(safe) - height);
+                    self.panel.frame = CGRectMake(x, y, width, height);
+                }
+            }
+
+            - (UIStackView *)makeHeaderRowWithTitle:(NSString *)title accessory:(UIView *)accessory {
+                UILabel *label = MPMakeRuntimeLabel(
+                    [UIFont preferredFontForTextStyle:UIFontTextStyleBody],
+                    MPPrimaryLabelColor(),
+                    2
+                );
+                label.text = title;
+                UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:
+                    accessory == nil ? @[label] : @[label, accessory]];
+                row.axis = UILayoutConstraintAxisHorizontal;
+                row.alignment = UIStackViewAlignmentCenter;
+                row.distribution = UIStackViewDistributionFill;
+                row.spacing = 10.0;
+                return row;
+            }
+
+            - (void)makePanelIfNeeded {
+                if (self.panel != nil) { return; }
+                UIBlurEffect *effect;
+                if (@available(iOS 13.0, *)) {
+                    effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemMaterial];
+                } else {
+                    effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleDark];
+                }
+                UIVisualEffectView *panel = [[UIVisualEffectView alloc] initWithEffect:effect];
+                panel.layer.cornerRadius = 18.0;
+                panel.clipsToBounds = YES;
+                panel.accessibilityViewIsModal = YES;
+                self.panel = panel;
+
+                UIScrollView *scrollView = [[UIScrollView alloc] initWithFrame:CGRectZero];
+                scrollView.translatesAutoresizingMaskIntoConstraints = NO;
+                scrollView.alwaysBounceVertical = YES;
+                [panel.contentView addSubview:scrollView];
+                [NSLayoutConstraint activateConstraints:@[
+                    [scrollView.leadingAnchor constraintEqualToAnchor:panel.contentView.leadingAnchor],
+                    [scrollView.trailingAnchor constraintEqualToAnchor:panel.contentView.trailingAnchor],
+                    [scrollView.topAnchor constraintEqualToAnchor:panel.contentView.topAnchor],
+                    [scrollView.bottomAnchor constraintEqualToAnchor:panel.contentView.bottomAnchor],
+                ]];
+
+                UIStackView *stack = [[UIStackView alloc] initWithFrame:CGRectZero];
+                stack.translatesAutoresizingMaskIntoConstraints = NO;
+                stack.axis = UILayoutConstraintAxisVertical;
+                stack.spacing = 10.0;
+                stack.layoutMargins = UIEdgeInsetsMake(16.0, 16.0, 16.0, 16.0);
+                stack.layoutMarginsRelativeArrangement = YES;
+                [scrollView addSubview:stack];
+                [NSLayoutConstraint activateConstraints:@[
+                    [stack.leadingAnchor constraintEqualToAnchor:scrollView.contentLayoutGuide.leadingAnchor],
+                    [stack.trailingAnchor constraintEqualToAnchor:scrollView.contentLayoutGuide.trailingAnchor],
+                    [stack.topAnchor constraintEqualToAnchor:scrollView.contentLayoutGuide.topAnchor],
+                    [stack.bottomAnchor constraintEqualToAnchor:scrollView.contentLayoutGuide.bottomAnchor],
+                    [stack.widthAnchor constraintEqualToAnchor:scrollView.frameLayoutGuide.widthAnchor],
+                ]];
+                self.panelStack = stack;
+
+                UILabel *title = MPMakeRuntimeLabel(
+                    [UIFont boldSystemFontOfSize:20.0],
+                    MPPrimaryLabelColor(),
+                    1
+                );
+                title.text = @"MachPatch Controls";
+                UIButton *closeButton = [UIButton buttonWithType:UIButtonTypeSystem];
+                [closeButton setTitle:@"Done" forState:UIControlStateNormal];
+                [closeButton addTarget:self
+                    action:@selector(closePanel:)
+                    forControlEvents:UIControlEventTouchUpInside];
+                UIStackView *header = [[UIStackView alloc]
+                    initWithArrangedSubviews:@[title, closeButton]];
+                header.axis = UILayoutConstraintAxisHorizontal;
+                header.alignment = UIStackViewAlignmentCenter;
+                [stack addArrangedSubview:header];
+
+                self.summaryLabel = MPMakeRuntimeLabel(
+                    [UIFont preferredFontForTextStyle:UIFontTextStyleCaption1],
+                    MPSecondaryLabelColor(),
+                    1
+                );
+                [stack addArrangedSubview:self.summaryLabel];
+
+                UISwitch *master = [[UISwitch alloc] initWithFrame:CGRectZero];
+                [master addTarget:self
+                    action:@selector(masterSwitchChanged:)
+                    forControlEvents:UIControlEventValueChanged];
+                self.masterSwitch = master;
+                UIStackView *masterRow = [self makeHeaderRowWithTitle:@"All Patches"
+                    accessory:master];
+                masterRow.layoutMargins = UIEdgeInsetsMake(10.0, 12.0, 10.0, 12.0);
+                masterRow.layoutMarginsRelativeArrangement = YES;
+                masterRow.backgroundColor = MPControlBackgroundColor();
+                masterRow.layer.cornerRadius = 12.0;
+                [stack addArrangedSubview:masterRow];
+
+                for (NSUInteger index = 0; index < MPRuntimeControlCount(); index += 1) {
+                    [stack addArrangedSubview:[self makeControlRow:index]];
+                }
+
+                UIStackView *footer = [[UIStackView alloc] initWithFrame:CGRectZero];
+                footer.axis = UILayoutConstraintAxisHorizontal;
+                footer.distribution = UIStackViewDistributionFillEqually;
+                footer.spacing = 8.0;
+                UIButton *reset = [UIButton buttonWithType:UIButtonTypeSystem];
+                [reset setTitle:@"Reset Defaults" forState:UIControlStateNormal];
+                [reset addTarget:self
+                    action:@selector(resetDefaults:)
+                    forControlEvents:UIControlEventTouchUpInside];
+                [footer addArrangedSubview:reset];
+                UIButton *showButton = [UIButton buttonWithType:UIButtonTypeSystem];
+                [showButton setTitle:@"Show Button" forState:UIControlStateNormal];
+                [showButton addTarget:self
+                    action:@selector(showButtonAgain:)
+                    forControlEvents:UIControlEventTouchUpInside];
+                [footer addArrangedSubview:showButton];
+                self.showButtonButton = showButton;
+                [stack addArrangedSubview:footer];
+
+                panel.hidden = YES;
+                [self.window addSubview:panel];
+            }
+
+            - (UIView *)makeControlRow:(NSUInteger)index {
+                MPRuntimeControlDescriptor *descriptor = &MPRuntimeControlDescriptors[index];
+                UIStackView *row = [[UIStackView alloc] initWithFrame:CGRectZero];
+                row.axis = UILayoutConstraintAxisVertical;
+                row.spacing = 5.0;
+                row.layoutMargins = UIEdgeInsetsMake(10.0, 12.0, 10.0, 12.0);
+                row.layoutMarginsRelativeArrangement = YES;
+                row.backgroundColor = MPControlBackgroundColor();
+                row.layer.cornerRadius = 12.0;
+
+                UIView *accessory = nil;
+                if (descriptor->kind == MPRuntimeControlKindToggle
+                    || descriptor->kind == MPRuntimeControlKindSignedInteger
+                    || descriptor->kind == MPRuntimeControlKindUnsignedInteger) {
+                    UISwitch *toggle = [[UISwitch alloc] initWithFrame:CGRectZero];
+                    toggle.tag = (NSInteger)index;
+                    [toggle addTarget:self
+                        action:@selector(controlSwitchChanged:)
+                        forControlEvents:UIControlEventValueChanged];
+                    self.switches[@(index)] = toggle;
+                    accessory = toggle;
+                }
+                [row addArrangedSubview:[self makeHeaderRowWithTitle:descriptor->title
+                    accessory:accessory]];
+
+                UILabel *method = MPMakeRuntimeLabel(
+                    [UIFont preferredFontForTextStyle:UIFontTextStyleCaption1],
+                    MPSecondaryLabelColor(),
+                    2
+                );
+                method.text = descriptor->methodDescription;
+                [row addArrangedSubview:method];
+
+                UILabel *status = MPMakeRuntimeLabel(
+                    [UIFont preferredFontForTextStyle:UIFontTextStyleCaption2],
+                    MPSecondaryLabelColor(),
+                    1
+                );
+                self.statusLabels[@(index)] = status;
+                [row addArrangedSubview:status];
+
+                if (descriptor->kind == MPRuntimeControlKindBoolean) {
+                    UISegmentedControl *segments = [[UISegmentedControl alloc]
+                        initWithItems:@[@"Original", @"False", @"True"]];
+                    segments.tag = (NSInteger)index;
+                    [segments addTarget:self
+                        action:@selector(booleanControlChanged:)
+                        forControlEvents:UIControlEventValueChanged];
+                    self.booleanControls[@(index)] = segments;
+                    [row addArrangedSubview:segments];
+                } else if (descriptor->kind == MPRuntimeControlKindSignedInteger
+                    || descriptor->kind == MPRuntimeControlKindUnsignedInteger) {
+                    UIStackView *integerRow = [[UIStackView alloc] initWithFrame:CGRectZero];
+                    integerRow.axis = UILayoutConstraintAxisHorizontal;
+                    integerRow.alignment = UIStackViewAlignmentCenter;
+                    integerRow.distribution = UIStackViewDistributionFill;
+                    integerRow.spacing = 8.0;
+
+                    UIButton *minus = [UIButton buttonWithType:UIButtonTypeSystem];
+                    [minus setTitle:@"−" forState:UIControlStateNormal];
+                    minus.titleLabel.font = [UIFont boldSystemFontOfSize:22.0];
+                    minus.tag = (NSInteger)index;
+                    minus.accessibilityLabel = @"Decrease value";
+                    [minus addTarget:self
+                        action:@selector(decrementInteger:)
+                        forControlEvents:UIControlEventTouchUpInside];
+                    [integerRow addArrangedSubview:minus];
+
+                    UITextField *field = [[UITextField alloc] initWithFrame:CGRectZero];
+                    field.borderStyle = UITextBorderStyleRoundedRect;
+                    field.textAlignment = NSTextAlignmentCenter;
+                    field.font = [UIFont monospacedDigitSystemFontOfSize:16.0
+                        weight:UIFontWeightRegular];
+                    field.keyboardType = descriptor->kind == MPRuntimeControlKindSignedInteger
+                        ? UIKeyboardTypeNumbersAndPunctuation
+                        : UIKeyboardTypeNumberPad;
+                    field.tag = (NSInteger)index;
+                    field.delegate = self;
+                    field.accessibilityLabel = @"Patch integer value";
+                    [field.widthAnchor constraintGreaterThanOrEqualToConstant:110.0].active = YES;
+                    self.integerFields[@(index)] = field;
+                    [integerRow addArrangedSubview:field];
+
+                    UIButton *plus = [UIButton buttonWithType:UIButtonTypeSystem];
+                    [plus setTitle:@"+" forState:UIControlStateNormal];
+                    plus.titleLabel.font = [UIFont boldSystemFontOfSize:22.0];
+                    plus.tag = (NSInteger)index;
+                    plus.accessibilityLabel = @"Increase value";
+                    [plus addTarget:self
+                        action:@selector(incrementInteger:)
+                        forControlEvents:UIControlEventTouchUpInside];
+                    [integerRow addArrangedSubview:plus];
+                    [row addArrangedSubview:integerRow];
+                }
+                return row;
+            }
+
+            - (void)showPanel {
+                [self makePanelIfNeeded];
+                self.panelVisible = YES;
+                self.panel.hidden = NO;
+                [self refreshControls];
+                [self layoutControls];
+                [self.window bringSubviewToFront:self.panel];
+                UIAccessibilityPostNotification(
+                    UIAccessibilityScreenChangedNotification,
+                    self.panel
+                );
+            }
+
+            - (void)closePanel:(id)sender {
+                (void)sender;
+                [self.panel endEditing:YES];
+                self.panelVisible = NO;
+                self.panel.hidden = YES;
+                self.panel.accessibilityViewIsModal = NO;
+                if (self.button != nil && !self.button.hidden) {
+                    UIAccessibilityPostNotification(
+                        UIAccessibilityScreenChangedNotification,
+                        self.button
+                    );
+                }
+            }
+
+            - (void)togglePanel {
+                if (self.panelVisible) {
+                    [self closePanel:nil];
+                } else {
+                    [self showPanel];
+                }
+            }
+
+            - (void)buttonTapped:(UIButton *)sender {
+                (void)sender;
+                [self togglePanel];
+            }
+
+            - (void)buttonPanned:(UIPanGestureRecognizer *)gesture {
+                UIView *view = gesture.view;
+                if (view == nil) { return; }
+                CGPoint translation = [gesture translationInView:self.window];
+                self.buttonCenter = CGPointMake(
+                    self.buttonCenter.x + translation.x,
+                    self.buttonCenter.y + translation.y
+                );
+                [gesture setTranslation:CGPointZero inView:self.window];
+                [self layoutControls];
+                if (gesture.state == UIGestureRecognizerStateEnded
+                    || gesture.state == UIGestureRecognizerStateCancelled) {
+                    CGRect safe = [self safeRect];
+                    self.buttonCenter = CGPointMake(
+                        self.buttonCenter.x < CGRectGetMidX(safe)
+                            ? CGRectGetMinX(safe) + 26.0
+                            : CGRectGetMaxX(safe) - 26.0,
+                        self.buttonCenter.y
+                    );
+                    [UIView animateWithDuration:0.2 animations:^{
+                        [self layoutControls];
+                    }];
+                }
+            }
+
+            - (void)buttonLongPressed:(UILongPressGestureRecognizer *)gesture {
+                if (gesture.state != UIGestureRecognizerStateBegan) { return; }
+                UIViewController *presenter = MPTopViewController(self.window.rootViewController);
+                if (presenter == nil || [presenter isKindOfClass:[UIAlertController class]]) {
                     return;
                 }
-                if ([presenter isKindOfClass:[UIAlertController class]]) {
-                    NSLog(@"[MachPatch] Suppressed alert because another alert is already visible.");
-                    return;
-                }
-                UIAlertController *alert = [UIAlertController
-                    alertControllerWithTitle:title
-                    message:message
-                    preferredStyle:UIAlertControllerStyleAlert];
-                [alert addAction:[UIAlertAction
-                    actionWithTitle:buttonTitle
+                UIAlertController *menu = [UIAlertController
+                    alertControllerWithTitle:@"MachPatch Controls"
+                    message:nil
+                    preferredStyle:UIAlertControllerStyleActionSheet];
+                __weak typeof(self) weakSelf = self;
+                [menu addAction:[UIAlertAction
+                    actionWithTitle:@"Reset Position"
                     style:UIAlertActionStyleDefault
+                    handler:^(__unused UIAlertAction *action) {
+                        weakSelf.hasButtonPosition = NO;
+                        [weakSelf layoutControls];
+                    }]];
+                if (!UIAccessibilityIsVoiceOverRunning()) {
+                    [menu addAction:[UIAlertAction
+                        actionWithTitle:@"Hide Until Next Launch"
+                        style:UIAlertActionStyleDefault
+                        handler:^(__unused UIAlertAction *action) {
+                            weakSelf.buttonHiddenForSession = YES;
+                            [weakSelf closePanel:nil];
+                            [weakSelf updateEntryPoints];
+                        }]];
+                }
+                [menu addAction:[UIAlertAction
+                    actionWithTitle:@"Cancel"
+                    style:UIAlertActionStyleCancel
                     handler:nil]];
-                [presenter presentViewController:alert animated:YES completion:nil];
-            });
+                UIPopoverPresentationController *popover = menu.popoverPresentationController;
+                popover.sourceView = self.button;
+                popover.sourceRect = self.button.bounds;
+                [presenter presentViewController:menu animated:YES completion:nil];
+            }
+
+            - (void)activationGestureRecognized:(UILongPressGestureRecognizer *)gesture {
+                if (gesture.state != UIGestureRecognizerStateBegan) { return; }
+                if (@available(iOS 10.0, *)) {
+                    UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc]
+                        initWithStyle:UIImpactFeedbackStyleMedium];
+                    [feedback impactOccurred];
+                }
+                [self togglePanel];
+            }
+
+            - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer {
+                if (gestureRecognizer == self.activationGesture) {
+                    return !UIAccessibilityIsVoiceOverRunning()
+                        && gestureRecognizer.numberOfTouches == 3;
+                }
+                return YES;
+            }
+
+            - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
+                shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other {
+                (void)gestureRecognizer;
+                (void)other;
+                return YES;
+            }
+
+            - (void)masterSwitchChanged:(UISwitch *)sender {
+                __atomic_store_n(
+                    &MPRuntimeControlsMasterEnabled,
+                    sender.isOn,
+                    __ATOMIC_RELEASE
+                );
+                [[MPRuntimeControlsManager sharedManager] refreshAllControls];
+            }
+
+            - (void)controlSwitchChanged:(UISwitch *)sender {
+                MPSetRuntimeControlEnabled((NSUInteger)sender.tag, sender.isOn);
+                [[MPRuntimeControlsManager sharedManager] refreshAllControls];
+            }
+
+            - (void)booleanControlChanged:(UISegmentedControl *)sender {
+                NSUInteger index = (NSUInteger)sender.tag;
+                if (sender.selectedSegmentIndex == 0) {
+                    MPSetRuntimeControlEnabled(index, NO);
+                } else {
+                    MPSetRuntimeControlBooleanValue(
+                        index,
+                        sender.selectedSegmentIndex == 2
+                    );
+                    MPSetRuntimeControlEnabled(index, YES);
+                }
+                [[MPRuntimeControlsManager sharedManager] refreshAllControls];
+            }
+
+            - (void)showInvalidValueFeedback:(UITextField *)field {
+                field.layer.borderColor = MPErrorColor().CGColor;
+                field.layer.borderWidth = 1.0;
+                if (@available(iOS 10.0, *)) {
+                    UINotificationFeedbackGenerator *feedback =
+                        [[UINotificationFeedbackGenerator alloc] init];
+                    [feedback notificationOccurred:UINotificationFeedbackTypeError];
+                }
+                __weak UITextField *weakField = field;
+                dispatch_after(
+                    dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)),
+                    dispatch_get_main_queue(),
+                    ^{
+                        weakField.layer.borderWidth = 0.0;
+                    }
+                );
+            }
+
+            - (BOOL)applyIntegerTextField:(UITextField *)field {
+                NSUInteger index = (NSUInteger)field.tag;
+                MPRuntimeControlDescriptor *descriptor = &MPRuntimeControlDescriptors[index];
+                NSString *text = [field.text stringByTrimmingCharactersInSet:
+                    NSCharacterSet.whitespaceAndNewlineCharacterSet];
+                if (descriptor->kind == MPRuntimeControlKindSignedInteger) {
+                    NSScanner *scanner = [NSScanner scannerWithString:text];
+                    long long value = 0;
+                    if (![scanner scanLongLong:&value] || !scanner.isAtEnd
+                        || !MPSetRuntimeControlSignedValue(index, (int64_t)value)) {
+                        return NO;
+                    }
+                } else if (descriptor->kind == MPRuntimeControlKindUnsignedInteger) {
+                    NSScanner *scanner = [NSScanner scannerWithString:text];
+                    unsigned long long value = 0;
+                    if ([text hasPrefix:@"-"] || ![scanner scanUnsignedLongLong:&value]
+                        || !scanner.isAtEnd
+                        || !MPSetRuntimeControlUnsignedValue(index, (uint64_t)value)) {
+                        return NO;
+                    }
+                } else {
+                    return NO;
+                }
+                return YES;
+            }
+
+            - (void)textFieldDidEndEditing:(UITextField *)textField {
+                if (![self applyIntegerTextField:textField]) {
+                    [self showInvalidValueFeedback:textField];
+                }
+                [[MPRuntimeControlsManager sharedManager] refreshAllControls];
+            }
+
+            - (BOOL)textFieldShouldReturn:(UITextField *)textField {
+                [textField resignFirstResponder];
+                return YES;
+            }
+
+            - (void)stepIntegerAtIndex:(NSUInteger)index increasing:(BOOL)increasing {
+                MPRuntimeControlDescriptor *descriptor = &MPRuntimeControlDescriptors[index];
+                BOOL accepted = NO;
+                if (descriptor->kind == MPRuntimeControlKindSignedInteger) {
+                    int64_t current = MPRuntimeControlSignedValue(index);
+                    int64_t next = 0;
+                    BOOL overflow = increasing
+                        ? __builtin_add_overflow(current, descriptor->signedStep, &next)
+                        : __builtin_sub_overflow(current, descriptor->signedStep, &next);
+                    accepted = !overflow && MPSetRuntimeControlSignedValue(index, next);
+                } else if (descriptor->kind == MPRuntimeControlKindUnsignedInteger) {
+                    uint64_t current = MPRuntimeControlUnsignedValue(index);
+                    uint64_t next = 0;
+                    BOOL overflow = increasing
+                        ? __builtin_add_overflow(current, descriptor->unsignedStep, &next)
+                        : __builtin_sub_overflow(current, descriptor->unsignedStep, &next);
+                    accepted = !overflow && MPSetRuntimeControlUnsignedValue(index, next);
+                }
+                if (!accepted) {
+                    UITextField *field = self.integerFields[@(index)];
+                    [self showInvalidValueFeedback:field];
+                }
+                [[MPRuntimeControlsManager sharedManager] refreshAllControls];
+            }
+
+            - (void)decrementInteger:(UIButton *)sender {
+                [self stepIntegerAtIndex:(NSUInteger)sender.tag increasing:NO];
+            }
+
+            - (void)incrementInteger:(UIButton *)sender {
+                [self stepIntegerAtIndex:(NSUInteger)sender.tag increasing:YES];
+            }
+
+            - (void)resetDefaults:(UIButton *)sender {
+                (void)sender;
+                MPResetRuntimeControlsToDefaults();
+                __atomic_store_n(&MPRuntimeControlsMasterEnabled, YES, __ATOMIC_RELEASE);
+                [[MPRuntimeControlsManager sharedManager] refreshAllControls];
+            }
+
+            - (void)showButtonAgain:(UIButton *)sender {
+                (void)sender;
+                self.buttonHiddenForSession = NO;
+                [self updateEntryPoints];
+                [self refreshControls];
+            }
+
+            - (void)refreshControls {
+                BOOL masterEnabled = __atomic_load_n(
+                    &MPRuntimeControlsMasterEnabled,
+                    __ATOMIC_ACQUIRE
+                );
+                self.masterSwitch.on = masterEnabled;
+                NSUInteger activeCount = 0;
+                for (NSUInteger index = 0; index < MPRuntimeControlCount(); index += 1) {
+                    MPRuntimeControlDescriptor *descriptor = &MPRuntimeControlDescriptors[index];
+                    BOOL enabled = MPRuntimeControlIsEnabled(index);
+                    if (enabled) { activeCount += 1; }
+                    UISwitch *toggle = self.switches[@(index)];
+                    toggle.on = enabled;
+                    toggle.enabled = *descriptor->patchState != MPPatchStateFailed;
+
+                    UISegmentedControl *segments = self.booleanControls[@(index)];
+                    if (segments != nil) {
+                        segments.selectedSegmentIndex = enabled
+                            ? (MPRuntimeControlBooleanValue(index) ? 2 : 1)
+                            : 0;
+                        segments.enabled = *descriptor->patchState != MPPatchStateFailed;
+                    }
+
+                    UITextField *field = self.integerFields[@(index)];
+                    if (field != nil && !field.isFirstResponder) {
+                        field.text = descriptor->kind == MPRuntimeControlKindSignedInteger
+                            ? [NSString stringWithFormat:@"%lld",
+                                (long long)MPRuntimeControlSignedValue(index)]
+                            : [NSString stringWithFormat:@"%llu",
+                                (unsigned long long)MPRuntimeControlUnsignedValue(index)];
+                        field.enabled = enabled
+                            && *descriptor->patchState != MPPatchStateFailed;
+                    }
+
+                    UILabel *status = self.statusLabels[@(index)];
+                    switch (*descriptor->patchState) {
+                    case MPPatchStateInstalled:
+                        status.text = enabled ? @"Installed · Patched" : @"Installed · Original";
+                        if (@available(iOS 13.0, *)) {
+                            status.textColor = UIColor.systemGreenColor;
+                        }
+                        break;
+                    case MPPatchStatePending:
+                        status.text = @"Waiting for class";
+                        status.textColor = MPSecondaryLabelColor();
+                        break;
+                    case MPPatchStateFailed:
+                        status.text = @"Unavailable";
+                        status.textColor = MPErrorColor();
+                        break;
+                    }
+                }
+                self.summaryLabel.text = masterEnabled
+                    ? [NSString stringWithFormat:@"%lu of %lu active",
+                        (unsigned long)activeCount,
+                        (unsigned long)MPRuntimeControlCount()]
+                    : @"All patches temporarily bypassed";
+                self.showButtonButton.hidden = !self.buttonHiddenForSession;
+            }
+
+            - (void)invalidate {
+                [self.button removeFromSuperview];
+                [self.panel removeFromSuperview];
+                if (self.activationGesture != nil && self.window != nil) {
+                    [self.window removeGestureRecognizer:self.activationGesture];
+                }
+                self.activationGesture = nil;
+            }
+
+            @end
+
+            @implementation MPRuntimeControlsManager
+
+            + (instancetype)sharedManager {
+                static MPRuntimeControlsManager *manager;
+                static dispatch_once_t onceToken;
+                dispatch_once(&onceToken, ^{
+                    manager = [[MPRuntimeControlsManager alloc] init];
+                    manager.overlays = [NSMapTable weakToStrongObjectsMapTable];
+                });
+                return manager;
+            }
+
+            - (void)start {
+                if (self.started) { return; }
+                self.started = YES;
+                if (UIAccessibilityIsVoiceOverRunning()) {
+                    MPVoiceOverFallbackForSession = YES;
+                }
+                NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+                [center addObserver:self
+                    selector:@selector(applicationStateChanged:)
+                    name:UIApplicationDidBecomeActiveNotification
+                    object:nil];
+                [center addObserver:self
+                    selector:@selector(applicationStateChanged:)
+                    name:UIWindowDidBecomeKeyNotification
+                    object:nil];
+                [center addObserver:self
+                    selector:@selector(voiceOverChanged:)
+                    name:UIAccessibilityVoiceOverStatusDidChangeNotification
+                    object:nil];
+                if (@available(iOS 13.0, *)) {
+                    [center addObserver:self
+                        selector:@selector(applicationStateChanged:)
+                        name:UISceneDidActivateNotification
+                        object:nil];
+                    [center addObserver:self
+                        selector:@selector(applicationStateChanged:)
+                        name:UISceneWillDeactivateNotification
+                        object:nil];
+                }
+                [self refreshWindows];
+                dispatch_after(
+                    dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
+                    dispatch_get_main_queue(),
+                    ^{ [self refreshWindows]; }
+                );
+                dispatch_after(
+                    dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
+                    dispatch_get_main_queue(),
+                    ^{ [self refreshWindows]; }
+                );
+            }
+
+            - (void)applicationStateChanged:(NSNotification *)notification {
+                (void)notification;
+                [self refreshWindows];
+            }
+
+            - (void)voiceOverChanged:(NSNotification *)notification {
+                (void)notification;
+                if (UIAccessibilityIsVoiceOverRunning()) {
+                    MPVoiceOverFallbackForSession = YES;
+                }
+                [self refreshWindows];
+            }
+
+            - (void)refreshWindows {
+                UIApplication *application = UIApplication.sharedApplication;
+                NSMutableSet<UIWindow *> *activeWindows = [NSMutableSet set];
+                if (@available(iOS 13.0, *)) {
+                    for (UIScene *scene in application.connectedScenes) {
+                        if (![scene isKindOfClass:[UIWindowScene class]]
+                            || scene.activationState != UISceneActivationStateForegroundActive) {
+                            continue;
+                        }
+                        for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+                            if (window.isKeyWindow && !window.hidden) {
+                                [activeWindows addObject:window];
+                            }
+                        }
+                    }
+                }
+                if (activeWindows.count == 0) {
+                    UIWindow *legacyWindow = [application valueForKey:@"keyWindow"];
+                    if (legacyWindow != nil && !legacyWindow.hidden) {
+                        [activeWindows addObject:legacyWindow];
+                    }
+                }
+
+                NSArray<UIWindow *> *knownWindows = self.overlays.keyEnumerator.allObjects;
+                for (UIWindow *window in knownWindows) {
+                    if (![activeWindows containsObject:window]) {
+                        MPRuntimeControlsOverlay *overlay = [self.overlays objectForKey:window];
+                        [overlay invalidate];
+                        [self.overlays removeObjectForKey:window];
+                    }
+                }
+                for (UIWindow *window in activeWindows) {
+                    MPRuntimeControlsOverlay *overlay = [self.overlays objectForKey:window];
+                    if (overlay == nil) {
+                        overlay = [[MPRuntimeControlsOverlay alloc] initWithWindow:window];
+                        [self.overlays setObject:overlay forKey:window];
+                    }
+                    [overlay updateEntryPoints];
+                    [overlay refreshControls];
+                }
+            }
+
+            - (void)refreshAllControls {
+                for (MPRuntimeControlsOverlay *overlay in self.overlays.objectEnumerator) {
+                    [overlay refreshControls];
+                }
+            }
+
+            @end
+            """
+    }
+
+    private func runtimeControlDescriptorEntry(_ context: PatchGenerationContext) -> String {
+        guard let control = context.patch.runtimeControl else {
+            preconditionFailure("Uncontrolled patch reached runtime descriptor generation")
         }
-        """
+        let common = [
+            ObjectiveCLiteral.string(context.patch.id),
+            ObjectiveCLiteral.string(control.title),
+            ObjectiveCLiteral.string(context.objcDescription),
+            "&\(context.controlEnabledName)",
+            control.defaultEnabled ? "YES" : "NO",
+            control.persistence == .acrossLaunches ? "YES" : "NO",
+        ]
+        let valueFields: [String]
+        switch control.value {
+        case .boolean(let value):
+            valueFields = [
+                "MPRuntimeControlKindBoolean", "&\(context.controlValueName)",
+                value ? "YES" : "NO",
+                "0LL", "0LL", "0LL", "0LL",
+                "0ULL", "0ULL", "0ULL", "0ULL",
+            ]
+        case .signedInteger(let configuration):
+            let bounds = runtimeSignedBounds(context, configuration: configuration)
+            valueFields = [
+                "MPRuntimeControlKindSignedInteger", "&\(context.controlValueName)", "NO",
+                signedLiteral(configuration.defaultValue),
+                signedLiteral(bounds.lowerBound),
+                signedLiteral(bounds.upperBound),
+                signedLiteral(configuration.step),
+                "0ULL", "0ULL", "0ULL", "0ULL",
+            ]
+        case .unsignedInteger(let configuration):
+            let bounds = runtimeUnsignedBounds(context, configuration: configuration)
+            valueFields = [
+                "MPRuntimeControlKindUnsignedInteger", "&\(context.controlValueName)", "NO",
+                "0LL", "0LL", "0LL", "0LL",
+                "\(configuration.defaultValue)ULL",
+                "\(bounds.lowerBound)ULL",
+                "\(bounds.upperBound)ULL",
+                "\(configuration.step)ULL",
+            ]
+        case nil:
+            valueFields = [
+                "MPRuntimeControlKindToggle", "NULL", "NO",
+                "0LL", "0LL", "0LL", "0LL",
+                "0ULL", "0ULL", "0ULL", "0ULL",
+            ]
+        }
+        return "{ \((common + valueFields + ["&\(context.stateName)"]).joined(separator: ", ")) }"
+    }
+
+    private func runtimeSignedBounds(
+        _ context: PatchGenerationContext,
+        configuration: PatchRuntimeSignedIntegerConfiguration
+    ) -> ClosedRange<Int64> {
+        let abiBounds: ClosedRange<Int64> =
+            switch context.signature.returnType.kind {
+            case .signedChar: Int64(Int8.min)...Int64(Int8.max)
+            case .signedShort: Int64(Int16.min)...Int64(Int16.max)
+            case .signedInt: Int64(Int32.min)...Int64(Int32.max)
+            default: Int64.min...Int64.max
+            }
+        return
+            (configuration.minimumValue ?? abiBounds.lowerBound)...(configuration.maximumValue
+            ?? abiBounds.upperBound)
+    }
+
+    private func runtimeUnsignedBounds(
+        _ context: PatchGenerationContext,
+        configuration: PatchRuntimeUnsignedIntegerConfiguration
+    ) -> ClosedRange<UInt64> {
+        let abiMaximum: UInt64 =
+            switch context.signature.returnType.kind {
+            case .unsignedChar: UInt64(UInt8.max)
+            case .unsignedShort: UInt64(UInt16.max)
+            case .unsignedInt: UInt64(UInt32.max)
+            default: UInt64.max
+            }
+        return (configuration.minimumValue ?? 0)...(configuration.maximumValue ?? abiMaximum)
+    }
+
+    private var alertRuntime: String {
+        let showAlertIsUsed = contexts.contains { context in
+            (context.advanced.beforeEffects + context.advanced.afterEffects).contains { effect in
+                if case .showAlert = effect { return true }
+                return false
+            }
+        }
+        let unusedAttribute = showAlertIsUsed ? "" : " __attribute__((unused))"
+        return """
+            static UIViewController *MPTopViewController(UIViewController *controller) {
+                if (controller == nil) { return nil; }
+                if (controller.presentedViewController != nil) {
+                    return MPTopViewController(controller.presentedViewController);
+                }
+                if ([controller isKindOfClass:[UINavigationController class]]) {
+                    return MPTopViewController(((UINavigationController *)controller).visibleViewController);
+                }
+                if ([controller isKindOfClass:[UITabBarController class]]) {
+                    return MPTopViewController(((UITabBarController *)controller).selectedViewController);
+                }
+                return controller;
+            }
+
+            static void\(unusedAttribute) MPShowAlert(
+                NSString *title,
+                NSString *message,
+                NSString *buttonTitle
+            ) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    UIApplication *application = UIApplication.sharedApplication;
+                    UIWindow *window = nil;
+                    if (@available(iOS 13.0, *)) {
+                        for (UIScene *scene in application.connectedScenes) {
+                            if (scene.activationState != UISceneActivationStateForegroundActive ||
+                                ![scene isKindOfClass:[UIWindowScene class]]) {
+                                continue;
+                            }
+                            for (UIWindow *candidate in ((UIWindowScene *)scene).windows) {
+                                if (candidate.isKeyWindow) {
+                                    window = candidate;
+                                    break;
+                                }
+                            }
+                            if (window != nil) { break; }
+                        }
+                    }
+                    if (window == nil) {
+                        window = [application valueForKey:@"keyWindow"];
+                    }
+                    UIViewController *presenter = MPTopViewController(window.rootViewController);
+                    if (presenter == nil) {
+                        NSLog(@"[MachPatch] Could not present alert because no active view controller was found.");
+                        return;
+                    }
+                    if ([presenter isKindOfClass:[UIAlertController class]]) {
+                        NSLog(@"[MachPatch] Suppressed alert because another alert is already visible.");
+                        return;
+                    }
+                    UIAlertController *alert = [UIAlertController
+                        alertControllerWithTitle:title
+                        message:message
+                        preferredStyle:UIAlertControllerStyleAlert];
+                    [alert addAction:[UIAlertAction
+                        actionWithTitle:buttonTitle
+                        style:UIAlertActionStyleDefault
+                        handler:nil]];
+                    [presenter presentViewController:alert animated:YES completion:nil];
+                });
+            }
+            """
     }
 
     private func renderPatch(_ context: PatchGenerationContext) -> String {
@@ -285,6 +1576,14 @@ private struct SourceRenderer {
         ]
         if context.needsInvocationCounter {
             parts.append("static uint64_t \(context.counterName) = 0;")
+        }
+        if let control = context.patch.runtimeControl {
+            parts.append(
+                "static BOOL \(context.controlEnabledName) = \(control.defaultEnabled ? "YES" : "NO");"
+            )
+            if let value = control.value {
+                parts.append(renderRuntimeControlValueState(value, context: context))
+            }
         }
         if context.needsOriginalImplementation {
             let functionArguments = (["id", "SEL"] + context.arguments.map(\.cType))
@@ -309,6 +1608,23 @@ private struct SourceRenderer {
         return parts.joined(separator: "\n\n")
     }
 
+    private func renderRuntimeControlValueState(
+        _ value: PatchRuntimeControlValue,
+        context: PatchGenerationContext
+    ) -> String {
+        switch value {
+        case .boolean(let defaultValue):
+            return
+                "static BOOL \(context.controlValueName) = \(defaultValue ? "YES" : "NO");"
+        case .signedInteger(let configuration):
+            return
+                "static int64_t \(context.controlValueName) = \(signedLiteral(configuration.defaultValue));"
+        case .unsignedInteger(let configuration):
+            return
+                "static uint64_t \(context.controlValueName) = \(configuration.defaultValue)ULL;"
+        }
+    }
+
     private func functionHeader(_ context: PatchGenerationContext) -> String {
         let parameters =
             (["id self", "SEL _cmd"]
@@ -328,6 +1644,9 @@ private struct SourceRenderer {
 
     private func replacementBody(_ context: PatchGenerationContext) -> [String] {
         var prefix: [String] = []
+        if context.patch.runtimeControl != nil {
+            prefix.append(contentsOf: runtimeControlPrologue(context))
+        }
         if let counter = context.advanced.invocationCounter {
             prefix.append(
                 "uint64_t invocationCount = __atomic_add_fetch(&\(context.counterName), 1, __ATOMIC_RELAXED);"
@@ -357,15 +1676,18 @@ private struct SourceRenderer {
         let primary: [String]
         switch context.patch.action {
         case .returnBoolean(let value):
-            primary = unusedParameterLines(context) + ["return \(value ? "YES" : "NO");"]
+            primary =
+                unusedParameterLines(context) + [
+                    "return \(runtimeBooleanExpression(context, fallback: value));"
+                ]
         case .returnSignedInteger(let value):
             primary =
                 unusedParameterLines(context)
-                + ["return (\(context.returnType))\(signedLiteral(value));"]
+                + ["return \(runtimeSignedIntegerExpression(context, fallback: value));"]
         case .returnUnsignedInteger(let value):
             primary =
                 unusedParameterLines(context)
-                + ["return (\(context.returnType))\(value)ULL;"]
+                + ["return \(runtimeUnsignedIntegerExpression(context, fallback: value));"]
         case .returnFloatingPoint(let value):
             primary =
                 unusedParameterLines(context)
@@ -405,9 +1727,85 @@ private struct SourceRenderer {
                 callOriginalForEffects(context)
                 + renderEffects(context.advanced.afterEffects, phase: "after-original")
                 + (context.signature.returnType.kind == .void ? [] : ["(void)originalResult;"])
-                + ["return \(replacementExpression(replacement, context: context));"]
+                + ["return \(runtimeReplacementExpression(replacement, context: context));"]
         }
         return prefix + primary
+    }
+
+    private func runtimeControlPrologue(_ context: PatchGenerationContext) -> [String] {
+        var lines = [
+            "BOOL runtimeControlEnabled = __atomic_load_n(&MPRuntimeControlsMasterEnabled, __ATOMIC_ACQUIRE) && __atomic_load_n(&\(context.controlEnabledName), __ATOMIC_ACQUIRE);",
+            "if (!runtimeControlEnabled) {",
+        ]
+        lines.append(contentsOf: callOriginalUnchanged(context).map { "    \($0)" })
+        lines.append("}")
+        if let value = context.patch.runtimeControl?.value {
+            let declaration =
+                switch value {
+                case .boolean:
+                    "BOOL runtimeControlValue"
+                case .signedInteger:
+                    "int64_t runtimeControlValue"
+                case .unsignedInteger:
+                    "uint64_t runtimeControlValue"
+                }
+            lines.append(
+                "\(declaration) = __atomic_load_n(&\(context.controlValueName), __ATOMIC_ACQUIRE);"
+            )
+        }
+        return lines
+    }
+
+    private func callOriginalUnchanged(_ context: PatchGenerationContext) -> [String] {
+        context.signature.returnType.kind == .void
+            ? ["\(context.originalCall);", "return;"]
+            : ["return \(context.originalCall);"]
+    }
+
+    private func runtimeBooleanExpression(
+        _ context: PatchGenerationContext,
+        fallback: Bool
+    ) -> String {
+        if case .boolean = context.patch.runtimeControl?.value {
+            return "runtimeControlValue"
+        }
+        return fallback ? "YES" : "NO"
+    }
+
+    private func runtimeSignedIntegerExpression(
+        _ context: PatchGenerationContext,
+        fallback: Int64
+    ) -> String {
+        if case .signedInteger = context.patch.runtimeControl?.value {
+            return "(\(context.returnType))runtimeControlValue"
+        }
+        return "(\(context.returnType))\(signedLiteral(fallback))"
+    }
+
+    private func runtimeUnsignedIntegerExpression(
+        _ context: PatchGenerationContext,
+        fallback: UInt64
+    ) -> String {
+        if case .unsignedInteger = context.patch.runtimeControl?.value {
+            return "(\(context.returnType))runtimeControlValue"
+        }
+        return "(\(context.returnType))\(fallback)ULL"
+    }
+
+    private func runtimeReplacementExpression(
+        _ replacement: PatchReturnValue,
+        context: PatchGenerationContext
+    ) -> String {
+        switch (replacement, context.patch.runtimeControl?.value) {
+        case (.boolean, .boolean):
+            return "runtimeControlValue"
+        case (.signedInteger, .signedInteger):
+            return "(\(context.returnType))runtimeControlValue"
+        case (.unsignedInteger, .unsignedInteger):
+            return "(\(context.returnType))runtimeControlValue"
+        default:
+            return replacementExpression(replacement, context: context)
+        }
     }
 
     private func unusedParameterLines(_ context: PatchGenerationContext) -> [String] {
@@ -827,19 +2225,22 @@ private struct SourceRenderer {
     }
 
     private func renderConstructor() -> String {
-        """
-        __attribute__((constructor))
-        static void MachPatchInitialize(void) {
-            @autoreleasepool {
-                NSLog(@"[MachPatch] Patch dylib loaded");
-                if (MPInstallPendingPatches() > 0) {
-                    MPScheduleRetry(1.0, NO);
-                    MPScheduleRetry(3.0, NO);
-                    MPScheduleRetry(8.0, YES);
-                }
-            }
+        var lines = [
+            "__attribute__((constructor))",
+            "static void MachPatchInitialize(void) {",
+            "    @autoreleasepool {",
+            "        NSLog(@\"[MachPatch] Patch dylib loaded\");",
+            "        if (MPInstallPendingPatches() > 0) {",
+            "            MPScheduleRetry(1.0, NO);",
+            "            MPScheduleRetry(3.0, NO);",
+            "            MPScheduleRetry(8.0, YES);",
+            "        }",
+        ]
+        if contexts.contains(where: { $0.patch.runtimeControl != nil }) {
+            lines.append("        MPInitializeRuntimeControls();")
         }
-        """
+        lines.append(contentsOf: ["    }", "}"])
+        return lines.joined(separator: "\n")
     }
 
     private func indent(_ value: String, spaces: Int) -> String {

@@ -208,6 +208,7 @@ public struct PatchDylibBuilder: Sendable {
             "-Wextra",
             "-framework", "Foundation",
             "-framework", "UIKit",
+            "-framework", "CoreGraphics",
             "-Wl,-install_name,\(installName)",
             sourceURL.path,
             "-o", outputURL.path,

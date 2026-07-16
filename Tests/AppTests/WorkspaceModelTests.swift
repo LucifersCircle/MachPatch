@@ -882,6 +882,54 @@ final class WorkspaceModelTests: XCTestCase {
         }
     }
 
+    func testRuntimeControlExposureCreatesStableProjectConfigurationAndEditsPatch() async throws {
+        let target = makeLoadedTarget()
+        let analysis = makeAnalysis(for: target)
+        let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
+        let model = WorkspaceModel(loader: SuccessfulLoader(target: loadedTarget))
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+        let method = try XCTUnwrap(analysis.metadata.classes.first?.instanceMethods.first)
+        let patch = try model.addPatch(className: "AppController", method: method)
+
+        model.setRuntimeControlExposed(true, for: patch)
+
+        let exposedPatch = try XCTUnwrap(model.projectDraft?.patches.first)
+        let namespace = try XCTUnwrap(model.projectDraft?.runtimeControls?.id)
+        XCTAssertNotNil(UUID(uuidString: namespace))
+        XCTAssertEqual(exposedPatch.runtimeControl?.title, "featureEnabled")
+        XCTAssertEqual(exposedPatch.runtimeControl?.defaultEnabled, true)
+        XCTAssertEqual(exposedPatch.runtimeControl?.persistence, .session)
+        XCTAssertEqual(exposedPatch.runtimeControl?.order, 0)
+        XCTAssertNil(exposedPatch.runtimeControl?.value)
+
+        let editablePatch = exposedPatch.replacing(action: .returnBoolean(true))
+        model.updatePatch(editablePatch)
+        let edited = PatchRuntimeControlConfiguration(
+            title: "Debug Mode",
+            defaultEnabled: false,
+            persistence: .acrossLaunches,
+            order: 0,
+            value: .boolean(true)
+        )
+        model.updateRuntimeControl(for: editablePatch, configuration: edited)
+        model.updateRuntimeControlActivationMode(.both)
+
+        XCTAssertEqual(model.projectDraft?.patches.first?.runtimeControl, edited)
+        XCTAssertEqual(model.projectDraft?.runtimeControls?.activationMode, .both)
+        let validation = try XCTUnwrap(model.projectValidationReport)
+        XCTAssertTrue(validation.isValid, validation.errors.map(\.message).joined(separator: " | "))
+
+        let editedPatch = try XCTUnwrap(model.projectDraft?.patches.first)
+        model.setRuntimeControlExposed(true, for: editedPatch)
+        XCTAssertEqual(model.projectDraft?.patches.first?.runtimeControl, edited)
+
+        model.setRuntimeControlExposed(false, for: editedPatch)
+
+        XCTAssertNil(model.projectDraft?.patches.first?.runtimeControl)
+        XCTAssertEqual(model.projectDraft?.runtimeControls?.id, namespace)
+    }
+
     func testSelectingAnalyzedSliceDoesNotDiscardPatchDraft() async throws {
         let target = makeLoadedTarget()
         let analysis = makeAnalysis(for: target)

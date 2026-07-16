@@ -44,7 +44,7 @@ public struct PatchSourceBundleBuilder: Sendable {
         let deployment = project.build.minimumIOSVersion
         let arcFlag = project.build.enableARC ? " -fobjc-arc" : ""
         let common =
-            "-isysroot \"$SDK\" -miphoneos-version-min=\(deployment)\(arcFlag) -fblocks -dynamiclib -Wall -Wextra -framework Foundation -framework UIKit -Wl,-install_name,@rpath/\(outputName).dylib"
+            "-isysroot \"$SDK\" -miphoneos-version-min=\(deployment)\(arcFlag) -fblocks -dynamiclib -Wall -Wextra -framework Foundation -framework UIKit -framework CoreGraphics -Wl,-install_name,@rpath/\(outputName).dylib"
 
         var lines = [
             "#!/bin/sh",

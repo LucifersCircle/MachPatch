@@ -704,7 +704,7 @@ private struct PatchEditorView: View {
                             signature: signature
                         )
                     else { return }
-                    model.updatePatch(patch.replacing(action: action))
+                    model.updatePatch(replacingAction(action, in: patch))
                 }
             )
         ) {
@@ -738,6 +738,14 @@ private struct PatchEditorView: View {
             patch: patch,
             signature: signature,
             updatePatch: model.updatePatch
+        )
+
+        Divider()
+
+        PatchRuntimeControlEditorView(
+            patch: patch,
+            signature: signature,
+            model: model
         )
 
         let patchIssues =
@@ -866,6 +874,19 @@ private struct PatchEditorView: View {
                 "Calls the original method without logging or changing its behavior. This is useful as a safe baseline patch."
             )
         }
+    }
+
+    private func replacingAction(_ action: PatchAction, in patch: MethodPatch) -> MethodPatch {
+        let replacement = patch.replacing(action: action)
+        guard let control = patch.runtimeControl, let value = control.value else {
+            return replacement
+        }
+        guard
+            PatchRuntimeControlCompatibility.defaultEditableValue(for: action)?.kind == value.kind
+        else {
+            return replacement.replacingRuntimeControl(control.replacingValue(nil))
+        }
+        return replacement
     }
 
     @ViewBuilder

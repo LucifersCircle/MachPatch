@@ -68,6 +68,9 @@ struct BuildWorkspaceView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 projectSettings
+                if !runtimeControlledPatches.isEmpty {
+                    runtimeControlProjectSettings
+                }
                 architectureSummary
                 validationSummary
                 buildPanel
@@ -141,6 +144,38 @@ struct BuildWorkspaceView: View {
                         set: { model.updateARCEnabled($0) }
                     )
                 )
+            }
+            .padding(8)
+        }
+        .disabled(model.buildState.isBuilding)
+    }
+
+    private var runtimeControlProjectSettings: some View {
+        GroupBox("In-App Controls") {
+            VStack(alignment: .leading, spacing: 12) {
+                LabeledContent(
+                    "Exposed Patches",
+                    value: "\(runtimeControlledPatches.count)"
+                )
+                Picker(
+                    "Activation",
+                    selection: Binding(
+                        get: {
+                            model.projectDraft?.runtimeControls?.activationMode ?? .floatingButton
+                        },
+                        set: { model.updateRuntimeControlActivationMode($0) }
+                    )
+                ) {
+                    ForEach(PatchRuntimeControlActivationMode.allCases, id: \.self) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                Text(
+                    "The generated overlay becomes part of the target app UI. Gesture activation is never installed while VoiceOver is active."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
             .padding(8)
         }
@@ -272,6 +307,10 @@ struct BuildWorkspaceView: View {
         model.projectDraft?.patches.filter { !$0.enabled } ?? []
     }
 
+    private var runtimeControlledPatches: [MethodPatch] {
+        model.projectDraft?.patches.filter { $0.runtimeControl != nil } ?? []
+    }
+
     @ViewBuilder
     private func patchList(
         _ patches: [MethodPatch],
@@ -320,6 +359,15 @@ struct BuildWorkspaceView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
+                        if let control = patch.runtimeControl {
+                            Label(
+                                "In-App Control · \(control.title)",
+                                systemImage: "switch.2"
+                            )
+                            .font(.caption2)
+                            .foregroundStyle(.tint)
+                            .lineLimit(1)
+                        }
                     }
                     Spacer(minLength: 8)
                     Text(patch.expectedTypeEncoding)
@@ -936,6 +984,16 @@ struct BuildWorkspaceView: View {
             if character == "\n" { count += 1 }
         }
         return "\(lineCount) lines · \(file.contents.utf8.count) bytes"
+    }
+}
+
+private extension PatchRuntimeControlActivationMode {
+    var displayName: String {
+        switch self {
+        case .floatingButton: "Floating Button"
+        case .threeFingerHold: "Three-Finger Hold"
+        case .both: "Button and Gesture"
+        }
     }
 }
 

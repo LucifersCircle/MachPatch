@@ -35,6 +35,7 @@ final class MachPatchPackagerTests: XCTestCase {
         XCTAssertTrue(buildScript.contains("xcrun --sdk iphoneos --show-sdk-path"))
         XCTAssertTrue(buildScript.contains("-arch arm64"))
         XCTAssertTrue(buildScript.contains("-miphoneos-version-min=15.0"))
+        XCTAssertTrue(buildScript.contains("-framework CoreGraphics"))
         XCTAssertTrue(buildScript.contains("@rpath/FixturePatch.dylib"))
         XCTAssertTrue(try XCTUnwrap(files["build.sh"]?.isExecutable))
         let readme = try XCTUnwrap(

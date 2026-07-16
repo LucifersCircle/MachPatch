@@ -5,6 +5,7 @@ public struct PatchProject: Codable, Equatable, Sendable {
     public let projectName: String
     public let target: PatchTargetIdentity
     public let build: PatchBuildConfiguration
+    public let runtimeControls: PatchRuntimeControlsConfiguration?
     public let patches: [MethodPatch]
 
     public init(
@@ -12,12 +13,14 @@ public struct PatchProject: Codable, Equatable, Sendable {
         projectName: String,
         target: PatchTargetIdentity,
         build: PatchBuildConfiguration,
+        runtimeControls: PatchRuntimeControlsConfiguration? = nil,
         patches: [MethodPatch]
     ) {
         self.formatVersion = formatVersion
         self.projectName = projectName
         self.target = target
         self.build = build
+        self.runtimeControls = runtimeControls
         self.patches = patches
     }
 }
@@ -202,6 +205,7 @@ public struct MethodPatch: Codable, Equatable, Identifiable, Sendable {
     public let expectedTypeEncoding: String
     public let action: PatchAction
     public let advanced: PatchAdvancedConfiguration?
+    public let runtimeControl: PatchRuntimeControlConfiguration?
 
     public init(
         id: String,
@@ -211,7 +215,8 @@ public struct MethodPatch: Codable, Equatable, Identifiable, Sendable {
         methodKind: ObjectiveCMethodKind,
         expectedTypeEncoding: String,
         action: PatchAction,
-        advanced: PatchAdvancedConfiguration? = nil
+        advanced: PatchAdvancedConfiguration? = nil,
+        runtimeControl: PatchRuntimeControlConfiguration? = nil
     ) {
         self.id = id
         self.enabled = enabled
@@ -221,6 +226,7 @@ public struct MethodPatch: Codable, Equatable, Identifiable, Sendable {
         self.expectedTypeEncoding = expectedTypeEncoding
         self.action = action
         self.advanced = advanced
+        self.runtimeControl = runtimeControl
     }
 }
 
