@@ -9,6 +9,7 @@ Run from the repository root:
 
 ```bash
 swift test
+swift test --filter RuntimeFixtureTests
 swift build --product MachPatchApp
 swift build --product machpatch
 git diff --check
@@ -18,6 +19,20 @@ The suite covers deterministic project encoding, malformed-project diagnostics, 
 validation, dirty-state transitions, destructive patch confirmation, source generation, toolchain
 discovery failures, dylib verification, build provenance, source and Debian packaging, shareable
 artifact state, narrow-window layout calculations, and runtime-control generation.
+
+## Redistributable runtime fixture
+
+`Tests/Fixtures/RuntimeFixture` is a purpose-built iOS app with an embedded, explicitly late-loaded
+framework. It contains no decrypted or third-party application code. The `RuntimeFixtureTests`
+gate builds that target using the active iPhoneOS SDK, analyzes its immediate and framework images,
+generates and compiles scalar, object, structure, block, category, original-call, and late-loaded
+patches, verifies the dylibs, and packages source and Debian artifacts.
+
+For the manual device pass, build the fixture and follow its README:
+
+```bash
+Tests/Fixtures/RuntimeFixture/build.sh /tmp/MachPatchFixture
+```
 
 ## Large-target performance
 
@@ -87,7 +102,4 @@ See [livecontainer.md](livecontainer.md) for the detailed verifier and device wo
 ## Public-release blockers
 
 - Choose and add the project license.
-- Add a redistributable fixture iOS app and automated end-to-end workflow covering immediate,
-  original-call, late-loaded, scalar, object, category, and framework patches. Proprietary or
-  decrypted third-party targets cannot satisfy this gate.
 - Rerun and record the macOS UI, performance, and device gates against the exact release commit.

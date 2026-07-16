@@ -86,5 +86,12 @@ let package = Package(
                 "MachPatchPackager", "MachPatchVerifier",
             ]
         ),
+        .testTarget(
+            name: "RuntimeFixtureTests",
+            dependencies: [
+                "MachPatchAnalyzer", "MachPatchBuilder", "MachPatchCore", "MachPatchGenerator",
+                "MachPatchPackager", "MachPatchVerifier",
+            ]
+        ),
     ]
 )
