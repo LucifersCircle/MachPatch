@@ -166,15 +166,7 @@ struct ClassBrowserView: View {
     private func filtered(
         _ methods: [ObjectiveCCanonicalMethod]
     ) -> [ObjectiveCCanonicalMethod] {
-        let query = methodSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return methods }
-        return methods.filter {
-            $0.selector.localizedCaseInsensitiveContains(query)
-                || $0.typeEncoding?.localizedCaseInsensitiveContains(query) == true
-                || $0.categoryNames.contains(where: {
-                    $0.localizedCaseInsensitiveContains(query)
-                })
-        }
+        ObjectiveCMethodSearch.filtered(methods, query: methodSearch)
     }
 
     private func revealMethod(_ method: ObjectiveCCanonicalMethod) {
@@ -195,6 +187,23 @@ struct ClassBrowserView: View {
                 proxy.scrollTo(request.methodID, anchor: .center)
             }
             model.consumeMethodRevealRequest(id: request.id)
+        }
+    }
+}
+
+enum ObjectiveCMethodSearch {
+    static func filtered(
+        _ methods: [ObjectiveCCanonicalMethod],
+        query: String
+    ) -> [ObjectiveCCanonicalMethod] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return methods }
+        return methods.filter {
+            $0.selector.localizedCaseInsensitiveContains(query)
+                || $0.typeEncoding?.localizedCaseInsensitiveContains(query) == true
+                || $0.categoryNames.contains(where: {
+                    $0.localizedCaseInsensitiveContains(query)
+                })
         }
     }
 }

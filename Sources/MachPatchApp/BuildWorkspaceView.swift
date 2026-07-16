@@ -880,6 +880,17 @@ struct BuildWorkspaceView: View {
                 .font(.caption)
                 .textSelection(.enabled)
 
+            if let recoverySuggestion = failure.recoverySuggestion {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("How to Fix")
+                        .font(.caption.weight(.semibold))
+                    Text(recoverySuggestion)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+            }
+
             if previousArtifact != nil {
                 Label(
                     "The last successful dylib was preserved and is now stale.",

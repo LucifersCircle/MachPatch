@@ -60,6 +60,7 @@ struct PatchBuildArtifact: Equatable, Sendable {
 
 struct PatchBuildFailure: Equatable, Sendable {
     let message: String
+    let recoverySuggestion: String?
     let command: String?
     let standardOutput: String
     let standardError: String
@@ -67,6 +68,7 @@ struct PatchBuildFailure: Equatable, Sendable {
 
     init(error: any Error) {
         message = error.localizedDescription
+        recoverySuggestion = (error as? any LocalizedError)?.recoverySuggestion
         let execution = Self.commandExecution(from: error)
         command = execution?.invocation.displayString ?? Self.launchCommand(from: error)
         standardOutput = execution?.standardOutput ?? ""

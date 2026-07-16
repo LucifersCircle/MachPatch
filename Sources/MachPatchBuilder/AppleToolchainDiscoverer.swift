@@ -96,6 +96,15 @@ public enum AppleToolchainDiscoveryError: Error, Equatable, LocalizedError, Send
         }
     }
 
+    public var recoverySuggestion: String? {
+        switch self {
+        case .commandFailed, .emptyOutput:
+            "Install and open the full Xcode application, then select its developer directory with `sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer`. MachPatch requires the iPhoneOS SDK; Command Line Tools alone are insufficient."
+        case .nonAbsolutePath:
+            "Select a valid full-Xcode developer directory with `sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer`, then try the build again."
+        }
+    }
+
     private func diagnosticText(_ execution: BuildCommandExecution) -> String {
         let value =
             execution.standardError.isEmpty

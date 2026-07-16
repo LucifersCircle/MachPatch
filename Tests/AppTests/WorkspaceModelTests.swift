@@ -50,6 +50,36 @@ final class WorkspaceModelTests: XCTestCase {
         )
     }
 
+    func testOpeningProjectWithoutAnalyzedTargetExplainsTheRequiredFirstStep() {
+        let model = WorkspaceModel(loader: SuccessfulLoader(target: makeLoadedTarget()))
+
+        model.openProject(at: temporaryProjectURL())
+
+        XCTAssertEqual(model.workspaceAlert?.title, "Analyze a Target First")
+        XCTAssertTrue(model.workspaceAlert?.message.contains("supported architecture") == true)
+        XCTAssertFalse(model.isProjectImporterPresented)
+    }
+
+    func testMalformedProjectPreservesLoadedTargetAndShowsActionableDiagnostic() async {
+        let target = makeLoadedTarget()
+        let analysis = makeAnalysis(for: target)
+        let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
+        let model = WorkspaceModel(loader: SuccessfulLoader(target: loadedTarget))
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+        let projectURL = temporaryProjectURL()
+        defer { try? FileManager.default.removeItem(at: projectURL) }
+        try? Data("{".utf8).write(to: projectURL)
+
+        model.openProject(at: projectURL)
+        await waitForProjectImport(model)
+
+        XCTAssertEqual(model.phase, .loaded(loadedTarget))
+        XCTAssertEqual(model.workspaceAlert?.title, "Couldn’t Open Project")
+        XCTAssertTrue(model.workspaceAlert?.message.contains("not valid MachPatch") == true)
+        XCTAssertTrue(model.workspaceAlert?.message.contains("validate-project") == true)
+    }
+
     func testExplicitArchitectureSelectionLoadsAnalysis() async {
         let loadedTarget = makeLoadedTarget()
         let analysis = makeAnalysis(for: loadedTarget)
@@ -289,6 +319,113 @@ final class WorkspaceModelTests: XCTestCase {
             cachedResultChecksum += model.methodSearchMatches(for: matchedClass).count
         }
         XCTAssertEqual(cachedResultChecksum, 200)
+    }
+
+    func testConfiguredStressTargetPerformance() async throws {
+        guard
+            let targetPath = ProcessInfo.processInfo.environment["MACHPATCH_STRESS_TARGET"],
+            !targetPath.isEmpty
+        else {
+            throw XCTSkip(
+                "Set MACHPATCH_STRESS_TARGET to an authorized decrypted target to record local acceptance timings."
+            )
+        }
+
+        let inputURL = URL(filePath: targetPath)
+        let loader = TargetLoader()
+        let initialLoadStart = DispatchTime.now().uptimeNanoseconds
+        let loadedTarget = try await loader.loadTarget(at: inputURL)
+        let initialLoadMilliseconds = elapsedMilliseconds(since: initialLoadStart)
+        guard case .loaded = loadedTarget.analysisState else {
+            return XCTFail("The configured stress target did not produce an initial analysis.")
+        }
+
+        let model = WorkspaceModel(loader: SuccessfulLoader(target: loadedTarget))
+        model.openTarget(at: inputURL)
+        await waitForLoadToFinish(model)
+
+        let classCount = loadedTarget.classBrowserTargets.count
+        let methodCount = loadedTarget.classBrowserTargets.reduce(0) {
+            $0 + $1.methods.count
+        }
+        let classNeedle = try XCTUnwrap(
+            loadedTarget.classBrowserTargets.dropFirst(classCount / 2).first?.name
+        )
+        let classSearchStart = DispatchTime.now().uptimeNanoseconds
+        model.classSearch = classNeedle
+        let classSearchMilliseconds = elapsedMilliseconds(since: classSearchStart)
+        XCTAssertFalse(model.filteredClasses.isEmpty)
+
+        let methodTarget = try XCTUnwrap(
+            loadedTarget.classBrowserTargets.max {
+                $0.methods.count < $1.methods.count
+            }
+        )
+        let methodNeedle = try XCTUnwrap(methodTarget.methods.first?.selector)
+        let methodSearchStart = DispatchTime.now().uptimeNanoseconds
+        let methodMatches = ObjectiveCMethodSearch.filtered(
+            methodTarget.methods,
+            query: methodNeedle
+        )
+        let methodSearchMilliseconds = elapsedMilliseconds(since: methodSearchStart)
+        XCTAssertFalse(methodMatches.isEmpty)
+
+        let patchabilityReport = try XCTUnwrap(loadedTarget.patchabilityReport)
+        let patchableMethod = try XCTUnwrap(
+            patchabilityReport.methods.first(where: \.isAvailableInEditor)
+        )
+        let patchTarget = try XCTUnwrap(
+            loadedTarget.classBrowserTargets.first {
+                $0.name == patchableMethod.className
+            }
+        )
+        let canonicalMethod = try XCTUnwrap(
+            patchTarget.methods.first {
+                $0.kind == patchableMethod.methodKind
+                    && $0.selector == patchableMethod.selector
+            }
+        )
+        let mutationStart = DispatchTime.now().uptimeNanoseconds
+        let patch = try model.addPatch(className: patchTarget.name, method: canonicalMethod)
+        model.removePatch(id: patch.id)
+        let patchMutationMilliseconds = elapsedMilliseconds(since: mutationStart)
+
+        var imageSwitchMilliseconds: Double?
+        var imageSwitchName: String?
+        for image in loadedTarget.images.dropFirst() {
+            guard
+                case .available(_, let architectureReport) = image.inspectionState,
+                let sliceIndex = architectureReport.slices.first(where: \.supportedForPatching)?
+                    .index
+            else { continue }
+
+            let imageSwitchStart = DispatchTime.now().uptimeNanoseconds
+            do {
+                _ = try await loader.loadAnalysis(
+                    at: inputURL,
+                    expectedHostSHA256: loadedTarget.target.sha256,
+                    imageID: image.id,
+                    expectedImageSHA256: image.image.sha256,
+                    sliceIndex: sliceIndex
+                )
+                imageSwitchMilliseconds = elapsedMilliseconds(since: imageSwitchStart)
+                imageSwitchName = image.image.executableName
+                break
+            } catch {
+                continue
+            }
+        }
+
+        print(
+            "MACHPATCH_STRESS_RESULT "
+                + "classes=\(classCount) methods=\(methodCount) "
+                + "initialLoadMs=\(formatMilliseconds(initialLoadMilliseconds)) "
+                + "classSearchMs=\(formatMilliseconds(classSearchMilliseconds)) "
+                + "methodSearchMs=\(formatMilliseconds(methodSearchMilliseconds)) "
+                + "patchMutationMs=\(formatMilliseconds(patchMutationMilliseconds)) "
+                + "imageSwitchMs=\(imageSwitchMilliseconds.map(formatMilliseconds) ?? "unavailable") "
+                + "image=\(imageSwitchName ?? "unavailable")"
+        )
     }
 
     func testInspectPatchNavigatesToItsClassAndMethod() async throws {
@@ -705,6 +842,28 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertEqual(failure.command, "/usr/bin/clang -dynamiclib Fixture.m")
         XCTAssertEqual(failure.terminationStatus, 1)
         XCTAssertEqual(failure.diagnosticText, "Fixture.m:12:3: error: synthetic failure")
+    }
+
+    func testToolchainBuildFailureIncludesActionableRecovery() {
+        let invocation = BuildCommandInvocation(
+            executablePath: "/usr/bin/xcrun",
+            arguments: ["--sdk", "iphoneos", "--show-sdk-path"]
+        )
+        let failure = PatchBuildFailure(
+            error: AppleToolchainDiscoveryError.commandFailed(
+                BuildCommandExecution(
+                    invocation: invocation,
+                    standardOutput: "",
+                    standardError: "unable to find SDK iphoneos",
+                    terminationStatus: 1,
+                    durationMilliseconds: 4
+                )
+            )
+        )
+
+        XCTAssertEqual(failure.command, "/usr/bin/xcrun --sdk iphoneos --show-sdk-path")
+        XCTAssertTrue(failure.recoverySuggestion?.contains("full Xcode") == true)
+        XCTAssertTrue(failure.recoverySuggestion?.contains("xcode-select --switch") == true)
     }
 
     func testBlockingVerificationPreservesBuildAndPreventsExport() async {
@@ -1957,4 +2116,12 @@ private enum StubError: Error, LocalizedError {
     var errorDescription: String? {
         "The target could not be inspected."
     }
+}
+
+private func elapsedMilliseconds(since start: UInt64) -> Double {
+    Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+}
+
+private func formatMilliseconds(_ value: Double) -> String {
+    String(format: "%.2f", value)
 }

@@ -331,7 +331,9 @@ final class PatchDylibBuilderTests: XCTestCase {
         XCTAssertThrowsError(
             try makeBuilder(runner).build(makeProject(), outputDirectory: workspace)
         ) { error in
-            guard case .commandFailed(let execution) = error as? AppleToolchainDiscoveryError else {
+            guard let discoveryError = error as? AppleToolchainDiscoveryError,
+                case .commandFailed(let execution) = discoveryError
+            else {
                 return XCTFail("Expected commandFailed, received \(error)")
             }
             XCTAssertEqual(execution.terminationStatus, 72)
@@ -340,6 +342,9 @@ final class PatchDylibBuilderTests: XCTestCase {
                 ["--sdk", "iphoneos", "--show-sdk-path"]
             )
             XCTAssertTrue(error.localizedDescription.contains("iPhoneOS SDK is unavailable"))
+            XCTAssertTrue(
+                discoveryError.recoverySuggestion?.contains("Command Line Tools alone") == true
+            )
         }
     }
 

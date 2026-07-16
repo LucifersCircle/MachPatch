@@ -23,6 +23,23 @@ final class PatchProjectTests: XCTestCase {
         XCTAssertEqual(action["value"] as? Bool, true)
     }
 
+    func testMalformedProjectReportsTheExactMissingFieldAndRecovery() {
+        let data = Data(#"{"formatVersion":1}"#.utf8)
+
+        XCTAssertThrowsError(try PatchProjectCodec.decode(data)) { error in
+            guard case .invalidJSON(let message) = error as? PatchProjectCodecError else {
+                return XCTFail("Expected invalidJSON, received \(error)")
+            }
+            XCTAssertTrue(message.contains("Missing required field"))
+            XCTAssertTrue(message.contains("projectName"))
+            XCTAssertTrue(
+                (error as? PatchProjectCodecError)?.recoverySuggestion?.contains(
+                    "ExamplePatch.json"
+                ) == true
+            )
+        }
+    }
+
     func testSelectedImageIdentityRoundTripsAndLegacyProjectsDefaultToPrimaryImage() throws {
         let base = makeProject()
         let frameworkIdentity = PatchImageIdentity(

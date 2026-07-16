@@ -307,6 +307,8 @@ package and prints their exact paths as JSON.
 
 The next implementation phases and their acceptance gates are tracked in
 [docs/implementation-roadmap.md](docs/implementation-roadmap.md).
+Use [docs/release-checklist.md](docs/release-checklist.md) to run and record the automated,
+performance, macOS UI, and device gates for a release candidate.
 
 ## Development tools
 
@@ -331,3 +333,6 @@ deterministic source generation, device dylib building, architecture resolution,
 verification, and the complete SwiftUI workflow are implemented. Device acceptance covers
 immediate, original-call, and late-loaded class patches. Reproducible source archives and
 ordinary-arm64 Debian packages are available as optional outputs.
+
+Public release still requires the checklist's redistributable runtime fixture, final device pass,
+and an explicitly chosen project license.

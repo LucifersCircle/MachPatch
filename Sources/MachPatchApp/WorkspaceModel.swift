@@ -854,7 +854,7 @@ final class WorkspaceModel: ObservableObject {
             } catch {
                 self?.workspaceAlert = WorkspaceAlert(
                     title: "Couldn’t Open Project",
-                    message: error.localizedDescription
+                    message: Self.projectOpenFailureMessage(error)
                 )
             }
         }
@@ -1470,6 +1470,14 @@ final class WorkspaceModel: ObservableObject {
             }
             return try PatchProjectCodec.decode(Data(contentsOf: projectURL))
         }.value
+    }
+
+    private nonisolated static func projectOpenFailureMessage(_ error: any Error) -> String {
+        let message = error.localizedDescription
+        guard let recoverySuggestion = (error as? any LocalizedError)?.recoverySuggestion else {
+            return message
+        }
+        return "\(message)\n\n\(recoverySuggestion)"
     }
 
     private func matchesClassMetadata(

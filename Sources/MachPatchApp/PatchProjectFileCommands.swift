@@ -5,6 +5,13 @@ struct PatchProjectFileCommands: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
+            Button("Open Target…") {
+                model.chooseTarget()
+            }
+            .keyboardShortcut("o", modifiers: .command)
+
+            Divider()
+
             Button("New Patch") {
                 model.requestNewPatch()
             }
@@ -37,6 +44,12 @@ struct PatchProjectFileCommands: Commands {
                 model.exportPatch()
             }
             .disabled(model.projectDraft == nil)
+
+            if let completedExport = model.shareableArtifact(for: .patchProject) {
+                ShareLink(item: completedExport.url) {
+                    Text("Share Patch…")
+                }
+            }
         }
 
         CommandGroup(replacing: .saveItem) {}
@@ -49,19 +62,63 @@ struct PatchBuildCommands: Commands {
 
     var body: some Commands {
         CommandMenu("Build") {
-            Button(model.buildState.artifact == nil ? "Build Dylib" : "Rebuild Dylib") {
-                model.buildDylib()
-            }
-            .keyboardShortcut("b", modifiers: .command)
-            .disabled(!model.canBuild)
+            PatchBuildActionMenuItems(model: model, includesKeyboardShortcuts: true)
+        }
+    }
+}
 
-            Divider()
+struct PatchBuildActionMenuItems: View {
+    @ObservedObject var model: WorkspaceModel
+    var includesKeyboardShortcuts = false
 
-            Button("Export Dylib…") {
-                model.exportDylib()
+    var body: some View {
+        Button(model.buildState.artifact == nil ? "Build Dylib" : "Rebuild Dylib") {
+            model.buildDylib()
+        }
+        .keyboardShortcut(
+            includesKeyboardShortcuts ? KeyboardShortcut("b", modifiers: .command) : nil
+        )
+        .disabled(!model.canBuild)
+
+        Divider()
+
+        Button("Export Dylib…") {
+            model.exportDylib()
+        }
+        .keyboardShortcut(
+            includesKeyboardShortcuts
+                ? KeyboardShortcut("e", modifiers: [.command, .shift]) : nil
+        )
+        .disabled(!model.canExportDylib)
+
+        if let completedExport = model.shareableArtifact(for: .dylib) {
+            ShareLink(item: completedExport.url) {
+                Label("Share Dylib…", systemImage: "square.and.arrow.up")
             }
-            .keyboardShortcut("e", modifiers: [.command, .shift])
-            .disabled(!model.canExportDylib)
+        }
+
+        Divider()
+
+        Button("Export Source Bundle (.zip)…") {
+            model.exportSourceBundle()
+        }
+        .disabled(!model.canExportSourceBundle)
+
+        if let completedExport = model.shareableArtifact(for: .sourceBundle) {
+            ShareLink(item: completedExport.url) {
+                Label("Share Source Bundle…", systemImage: "square.and.arrow.up")
+            }
+        }
+
+        Button("Export Debian Package (.deb)…") {
+            model.exportDebianPackage()
+        }
+        .disabled(!model.canExportDebianPackage)
+
+        if let completedExport = model.shareableArtifact(for: .debianPackage) {
+            ShareLink(item: completedExport.url) {
+                Label("Share Debian Package…", systemImage: "square.and.arrow.up")
+            }
         }
     }
 }
@@ -120,29 +177,7 @@ struct PatchProjectActionMenuItems: View {
         }
 
         Divider()
-
-        Button {
-            model.buildDylib()
-        } label: {
-            Label(
-                model.buildState.artifact == nil ? "Build Dylib" : "Rebuild Dylib",
-                systemImage: "hammer.fill"
-            )
-        }
-        .disabled(!model.canBuild)
-
-        Button {
-            model.exportDylib()
-        } label: {
-            Label("Export Dylib…", systemImage: "square.and.arrow.down")
-        }
-        .disabled(!model.canExportDylib)
-
-        if let completedExport = model.shareableArtifact(for: .dylib) {
-            ShareLink(item: completedExport.url) {
-                Label("Share Dylib…", systemImage: "square.and.arrow.up")
-            }
-        }
+        PatchBuildActionMenuItems(model: model)
     }
 }
 
