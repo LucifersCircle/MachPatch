@@ -27,6 +27,18 @@ Scripts/package-app.sh
 open dist/MachPatch.app
 ```
 
+Create the arm64 drag-to-install disk image used for GitHub releases with:
+
+```bash
+Scripts/create-release-dmg.sh dist 0.1.0
+open dist/MachPatch-0.1.0-macOS-arm64.dmg
+```
+
+The **Release** GitHub Actions workflow can be run manually to prove the build and retain its DMG
+as a workflow artifact. Pushing a tag matching the bundle version, such as `v0.1.0`, also creates a
+GitHub Release with the DMG and SHA-256 attached directly. The default build is ad-hoc signed; a
+Developer ID certificate and notarization are a separate distribution upgrade.
+
 ## Resolve an input
 
 `resolve` accepts a decrypted IPA, an iOS `.app` directory, a `.framework` bundle, or a direct
@@ -341,5 +353,4 @@ verification, and the complete SwiftUI workflow are implemented. Device acceptan
 immediate, original-call, and late-loaded class patches. Reproducible source archives and
 ordinary-arm64 Debian packages are available as optional outputs.
 
-Public release still requires the checklist's redistributable runtime fixture, final device pass,
-and an explicitly chosen project license.
+Public release still requires the final device pass and an explicitly chosen project license.

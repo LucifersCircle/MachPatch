@@ -1,0 +1,92 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version matching CFBundleShortVersionString
+        required: true
+        default: 0.1.0
+        type: string
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-release:
+    name: Build arm64 DMG
+    runs-on: macos-14
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Resolve and validate version
+        id: version
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$DISPATCH_VERSION"
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release version: $version" >&2
+            exit 2
+          fi
+          plist_version="$(plutil -extract CFBundleShortVersionString raw Resources/AppIcon/Info.plist)"
+          if [[ "$version" != "$plist_version" ]]; then
+            echo "Version $version does not match Info.plist version $plist_version" >&2
+            exit 3
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Show toolchain
+        run: |
+          swift --version
+          xcodebuild -version
+
+      - name: Check formatting
+        run: xcrun swift-format lint --recursive --strict Sources Tests Package.swift
+
+      - name: Run tests
+        run: swift test
+
+      - name: Build release DMG
+        env:
+          MACOS_ARCHITECTURE: arm64
+        run: Scripts/create-release-dmg.sh dist "${{ steps.version.outputs.version }}"
+
+      - name: Verify checksum
+        working-directory: dist
+        run: shasum -a 256 -c "MachPatch-${{ steps.version.outputs.version }}-macOS-arm64.dmg.sha256"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MachPatch-${{ steps.version.outputs.version }}-macOS-arm64
+          path: |
+            dist/MachPatch-${{ steps.version.outputs.version }}-macOS-arm64.dmg
+            dist/MachPatch-${{ steps.version.outputs.version }}-macOS-arm64.dmg.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub Release assets
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "dist/MachPatch-$VERSION-macOS-arm64.dmg" \
+            "dist/MachPatch-$VERSION-macOS-arm64.dmg.sha256" \
+            --verify-tag \
+            --title "MachPatch $VERSION" \
+            --generate-notes

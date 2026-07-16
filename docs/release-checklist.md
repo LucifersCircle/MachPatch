@@ -12,6 +12,7 @@ swift test
 swift test --filter RuntimeFixtureTests
 swift build --product MachPatchApp
 swift build --product machpatch
+Scripts/create-release-dmg.sh /tmp/MachPatchRelease 0.1.0
 git diff --check
 ```
 
@@ -19,6 +20,11 @@ The suite covers deterministic project encoding, malformed-project diagnostics, 
 validation, dirty-state transitions, destructive patch confirmation, source generation, toolchain
 discovery failures, dylib verification, build provenance, source and Debian packaging, shareable
 artifact state, narrow-window layout calculations, and runtime-control generation.
+
+The release DMG must contain an arm64 `MachPatch.app` and an Applications shortcut. Verify its
+checksum and mountability before publishing. A manual **Release** workflow run exercises this path
+without creating a GitHub Release; a matching `v*` tag publishes the DMG and checksum as release
+assets.
 
 ## Redistributable runtime fixture
 
