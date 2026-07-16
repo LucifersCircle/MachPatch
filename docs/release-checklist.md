@@ -109,4 +109,6 @@ See [livecontainer.md](livecontainer.md) for the detailed verifier and device wo
 ## Public-release blockers
 
 - Choose and add the project license.
+- Confirm and document the distribution-signing policy; notarize the app when using a Developer ID
+  identity, or clearly disclose the Gatekeeper behavior of the default ad-hoc signature.
 - Rerun and record the macOS UI, performance, and device gates against the exact release commit.

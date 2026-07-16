@@ -119,8 +119,8 @@ runtime accessor attributes.
 ## Patch schema and type decoding
 
 `MachPatchCore` owns the versioned project model, deterministic JSON codec, Objective-C type
-decoder, and target-independent validation. This lets the CLI, future GUI, generator, and verifier
-share one action-compatibility decision.
+decoder, and target-independent validation. This lets the CLI, SwiftUI application, generator, and
+verifier share one action-compatibility decision.
 
 The type decoder separates type tokens from method frame sizes and argument offsets. It recognizes
 unsupported ABI shapes so validation can reject them explicitly instead of misclassifying them.
@@ -216,35 +216,30 @@ blocking check fails.
 - Never execute content extracted from an IPA.
 - Keep generated patches free of Theos, Logos, Substrate, ElleKit, and jailbreak paths.
 - Keep models `Codable` and `Sendable` at analyzer and frontend boundaries.
-- Do not begin the SwiftUI application until the CLI produces and verifies a working arm64
-  dylib.
+- Keep analysis, validation, generation, building, and verification usable independently of the
+  SwiftUI application.
 
-## Completed milestones
+## Implemented capabilities
 
-0. Bootstrap the package, CLI shell, tests, CI, and documentation.
-1. Resolve IPA, `.app`, and direct Mach-O inputs to an executable and hash.
-2. Inspect thin and fat Mach-O slices, platforms, deployment versions, encryption, and linked
-   libraries.
-3. Extract and normalize Objective-C classes, methods, properties, ivars, protocols, and
-   categories behind a replaceable provider boundary.
-4. Round-trip patch schema version 1, decode Objective-C method signatures, and validate actions
-   structurally or against a current target.
-5. Generate deterministic, snapshot-tested native Objective-C runtime patch source with bounded
-   late-class retries.
-6. Discover the selected Xcode/iPhoneOS toolchain and build clean ordinary arm64 dylibs with
-   recorded commands and diagnostics.
-7. Resolve automatic/explicit architectures, distinguish legacy and versioned arm64e, probe the
-   selected toolchain, compare generated CPU metadata, and merge only validated universal slices.
-8. Verify LiveContainer compatibility with native facts, per-slice Apple-tool cross-checks,
-   dependency/symbol/path policy, target comparison, text/JSON reports, and blocking status.
-9. Confirm constructor, immediate, original-result, late-loaded, and failed-patch behavior through
-   LiveContainer without a jailbreak-specific dependency.
-10. Provide the full SwiftUI import, browser, patch editor, project, build, verification, and dylib
-    export workflow.
-11. Export deterministic source archives and ordinary-arm64 Debian archives while keeping the
-    plain dylib primary. Theos and Frida outputs are deferred by product scope.
-12. Add composable advanced behavior, Foundation object presets, expert Objective-C snippets,
-    target-aware private patch storage, import/export workflows, and native macOS File commands.
+- Resolve decrypted IPA, app, framework, extension, and direct Mach-O inputs without executing
+  target content; inspect every supported device slice and selected runtime image.
+- Normalize Objective-C classes, categories, methods, properties, ivars, and protocols behind a
+  replaceable provider boundary, then report exact patchability decisions.
+- Validate deterministic patch projects against decoded method signatures and the selected target;
+  generate typed Objective-C replacements, advanced effects, and bounded late-class retries.
+- Build ordinary arm64 and supported modern arm64e dylibs with discovered iPhoneOS toolchains,
+  recorded provenance, verified architecture metadata, and deterministic universal merging.
+- Audit LiveContainer compatibility, dependencies, symbols, deployment targets, and target-image
+  identity through human-readable and stable JSON reports.
+- Provide the native SwiftUI target browser, patch editor and library, runtime-control overlay,
+  build workspace, verification, sharing, and dylib/source/Debian export workflows.
+- Exercise generated runtime behavior with a redistributable fixture plus recorded device tests.
 
-Post-version-0.1 coverage and release work is tracked in
-[implementation-roadmap.md](implementation-roadmap.md).
+## Product scope
+
+- Patch targets are discovered Objective-C methods. Protocol declarations remain informative rather
+  than direct runtime targets.
+- Pure Swift symbols, C functions, C++ methods, Swift async conventions, variadics, and arbitrary
+  unsupported ABI layouts remain outside the safe patch model.
+- The plain self-contained dylib is the primary output. Theos, Frida, and jailbreak-specific
+  hooking-framework outputs are intentionally excluded.

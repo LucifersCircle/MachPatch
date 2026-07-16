@@ -1,7 +1,7 @@
 # Development
 
-Run `swift build`, `swift test`, and the relevant CLI acceptance command at the end of every
-milestone. Do not continue from a milestone with known test failures.
+Run `swift build`, `swift test`, and the relevant CLI acceptance command before committing a
+behavioral change. Do not treat a change as complete with known test failures.
 
 Fixture binaries must be purpose-built, redistributable test inputs and must never contain
 third-party application code.
@@ -103,8 +103,8 @@ The test suite compiles a project covering every version 1 action and all suppor
 types with host Clang warnings treated as errors. A separate iPhoneOS compile probe covers opaque
 block/pointer arguments plus exact `CGPoint`, `CGSize`, `CGRect`, and `NSRange` argument and return
 conventions. It also compares the example against a checked-in source snapshot and verifies
-symlink-resistant atomic output behavior. The iPhoneOS syntax command above is the milestone
-acceptance check; producing a linked dylib belongs to the builder milestone.
+symlink-resistant atomic output behavior. The iPhoneOS syntax command above is the source-generation
+acceptance check; the builder checks below cover producing a linked dylib.
 
 ## arm64 builder acceptance checks
 

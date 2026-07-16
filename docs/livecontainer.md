@@ -2,7 +2,7 @@
 
 The primary artifact is a plain, self-contained iPhoneOS dylib. Verification is a preflight audit;
 it cannot prove that a particular LiveContainer version will load a dylib or that a runtime patch
-will find its class. Those behaviors are exercised on-device in Milestone 9.
+will find its class. Those behaviors are exercised through the recorded device acceptance pass.
 
 ## Run the verifier
 
@@ -66,7 +66,7 @@ device workflow is otherwise the same:
 MachPatch does not copy artifacts into LiveContainer, modify an IPA, sign an app, or manage the
 guest process. The exported dylib is intentionally the handoff boundary.
 
-## Milestone 9 device acceptance
+## Recorded device acceptance
 
 The following behaviors were exercised with a decrypted arm64 iPhoneOS target whose minimum
 deployment version was iOS 15.6. Each dylib passed `machpatch verify --target` before import:
@@ -83,7 +83,7 @@ deployment version was iOS 15.6. Each dylib passed `machpatch verify --target` b
   Generated code took the unexpected-encoding logging branch, entered the permanent failed state,
   left the original method unchanged, and did not crash the process.
 
-These checks cover the Milestone 9 runtime contract. They do not guarantee that an unrelated app,
+These checks cover the current runtime contract. They do not guarantee that an unrelated app,
 OS version, architecture, or LiveContainer release behaves identically.
 
 ## Known limitations

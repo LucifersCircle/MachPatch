@@ -259,7 +259,7 @@ Audit a built dylib by itself or compare it with the current IPA, app, or execut
 ```
 
 Human-readable output is the default. `--json` emits the complete format-versioned report for
-automation and the future GUI. A blocking check returns a nonzero exit status.
+automation and other frontends. A blocking check returns a nonzero exit status.
 
 The verifier parses every Mach-O slice natively and cross-checks the architecture list with
 `lipo`. It requires an iPhoneOS dynamic library, supported arm64 or versioned arm64e CPU metadata,
@@ -271,7 +271,7 @@ unbundled third-party dependencies, development-machine install names, and incom
 are blocking failures.
 
 See [docs/livecontainer.md](docs/livecontainer.md) for the verification policy, device import and
-test workflow, Milestone 9 acceptance record, and known loader limitations.
+test workflow, recorded device acceptance, and known loader limitations.
 
 ## Patch library
 
@@ -324,8 +324,6 @@ recorded app image. `--arch` accepts the same modes as `build`. The command reta
 source, dylib, and verification-bearing `MachPatchBuild.json` beside the requested ZIP or Debian
 package and prints their exact paths as JSON.
 
-The next implementation phases and their acceptance gates are tracked in
-[docs/implementation-roadmap.md](docs/implementation-roadmap.md).
 Use [docs/release-checklist.md](docs/release-checklist.md) to run and record the automated,
 performance, macOS UI, and device gates for a release candidate.
 
@@ -349,8 +347,9 @@ and implementation constraints.
 
 Safe input resolution, native Mach-O and Objective-C inspection, type-aware patch editing,
 deterministic source generation, device dylib building, architecture resolution, LiveContainer
-verification, and the complete SwiftUI workflow are implemented. Device acceptance covers
-immediate, original-call, and late-loaded class patches. Reproducible source archives and
-ordinary-arm64 Debian packages are available as optional outputs.
+verification, runtime controls, release packaging, and the complete SwiftUI workflow are
+implemented. Device acceptance covers immediate, original-call, late-loaded, category, framework,
+and in-app-controlled patches. Reproducible source archives and ordinary-arm64 Debian packages are
+available as optional outputs.
 
-Public release still requires the final device pass and an explicitly chosen project license.
+Public release readiness is governed by [docs/release-checklist.md](docs/release-checklist.md).
