@@ -35,7 +35,7 @@ struct BuildWorkspaceView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(model.projectDraft?.projectName ?? "Patch Project")
                     .font(.title2.weight(.semibold))
-                Text("Configure the dylib and inspect the exact generated source before building.")
+                Text("Review patches, configure the dylib, then build, verify, and export.")
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -208,7 +208,7 @@ struct BuildWorkspaceView: View {
                                     .foregroundStyle(.secondary)
                                     .lineLimit(2)
                                     if patch.runtimeControl != nil {
-                                        Text("In app · Patch or Original")
+                                        Text("In app · Patched or Disabled")
                                             .font(.caption2.weight(.medium))
                                             .foregroundStyle(.tint)
                                             .lineLimit(1)
@@ -499,7 +499,7 @@ struct BuildWorkspaceView: View {
                         Text(sourceFile.relativePath)
                             .font(.subheadline.weight(.medium))
                         Spacer()
-                        Text("Read-only · generated from project JSON")
+                        Text("Read-only · generated from current project")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

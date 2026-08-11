@@ -12,6 +12,12 @@ struct MethodRevealRequest: Equatable, Identifiable {
     let methodID: String
 }
 
+struct ClassSearchSelectionRequest: Equatable, Identifiable {
+    let id = UUID()
+    let classID: String
+    let methodSearch: String
+}
+
 enum PendingWorkspaceTransition: Equatable {
     case startNewPatch
     case openTarget(URL)
@@ -82,6 +88,7 @@ final class WorkspaceModel: ObservableObject {
     @Published var navigation: WorkspaceNavigation? = .target
     @Published var selectedMethodID: String?
     @Published private(set) var methodRevealRequest: MethodRevealRequest?
+    @Published private(set) var classSearchSelectionRequest: ClassSearchSelectionRequest?
     @Published var classSearch = "" {
         didSet { refreshClassBrowserResults() }
     }
@@ -130,7 +137,7 @@ final class WorkspaceModel: ObservableObject {
     private var classBrowserTargetsByName: [String: ObjectiveCClassBrowserTarget] = [:]
     private var classBrowserTargetsByFilter:
         [ObjectiveCClassFilter: [ObjectiveCClassBrowserTarget]] = [:]
-    private var methodSearchMatchesByClassID: [String: [ObjectiveCCanonicalMethod]] = [:]
+    private var classSearchMatchesByClassID: [String: ObjectiveCClassSearchMatch] = [:]
     private var isClassBrowserRefreshSuspended = false
 
     init(
@@ -172,6 +179,7 @@ final class WorkspaceModel: ObservableObject {
         navigation = .target
         selectedMethodID = nil
         methodRevealRequest = nil
+        classSearchSelectionRequest = nil
         resetClassBrowserQuery()
         savedProjectBaseline = nil
         replaceProjectDraft(nil)
@@ -363,6 +371,7 @@ final class WorkspaceModel: ObservableObject {
         navigation = .target
         selectedMethodID = nil
         methodRevealRequest = nil
+        classSearchSelectionRequest = nil
         resetClassBrowserQuery()
         savedProjectBaseline = nil
         replaceProjectDraft(nil)
@@ -409,7 +418,39 @@ final class WorkspaceModel: ObservableObject {
     func methodSearchMatches(
         for objectiveCClass: ObjectiveCClassBrowserTarget
     ) -> [ObjectiveCCanonicalMethod] {
-        methodSearchMatchesByClassID[objectiveCClass.id] ?? []
+        classSearchMatchesByClassID[objectiveCClass.id]?.methods ?? []
+    }
+
+    func classSearchMatch(
+        for objectiveCClass: ObjectiveCClassBrowserTarget
+    ) -> ObjectiveCClassSearchMatch? {
+        classSearchMatchesByClassID[objectiveCClass.id]
+    }
+
+    func initialMethodSearch(
+        for objectiveCClass: ObjectiveCClassBrowserTarget
+    ) -> String {
+        guard classSearchSelectionRequest?.classID == objectiveCClass.id else { return "" }
+        return classSearchSelectionRequest?.methodSearch ?? ""
+    }
+
+    func selectClassSearchResult(_ objectiveCClass: ObjectiveCClassBrowserTarget) {
+        guard classBrowserTargetsByID[objectiveCClass.id] != nil else { return }
+        methodRevealRequest = nil
+        let methodSearch =
+            classSearchMatchesByClassID[objectiveCClass.id]?.methods.isEmpty == false
+            ? classSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+            : ""
+        classSearchSelectionRequest = ClassSearchSelectionRequest(
+            classID: objectiveCClass.id,
+            methodSearch: methodSearch
+        )
+        navigation = .objectiveCClass(objectiveCClass.id)
+    }
+
+    func consumeClassSearchSelectionRequest(id: UUID) {
+        guard classSearchSelectionRequest?.id == id else { return }
+        classSearchSelectionRequest = nil
     }
 
     var patchProject: PatchProject? {
@@ -906,6 +947,7 @@ final class WorkspaceModel: ObservableObject {
     }
 
     func revealMethod(_ method: ObjectiveCCanonicalMethod) {
+        classSearchSelectionRequest = nil
         selectedMethodID = method.id
         methodRevealRequest = MethodRevealRequest(methodID: method.id)
     }
@@ -1248,7 +1290,7 @@ final class WorkspaceModel: ObservableObject {
             classBrowserTargetsByName = [:]
             classBrowserTargetsByFilter = [:]
             filteredClasses = []
-            methodSearchMatchesByClassID = [:]
+            classSearchMatchesByClassID = [:]
             return
         }
 
@@ -1276,7 +1318,7 @@ final class WorkspaceModel: ObservableObject {
         guard !isClassBrowserRefreshSuspended else { return }
         guard case .loaded(let loadedTarget) = phase else {
             filteredClasses = []
-            methodSearchMatchesByClassID = [:]
+            classSearchMatchesByClassID = [:]
             return
         }
 
@@ -1285,41 +1327,40 @@ final class WorkspaceModel: ObservableObject {
             classBrowserTargetsByFilter[classFilter] ?? loadedTarget.classBrowserTargets
         guard !query.isEmpty else {
             filteredClasses = candidates
-            methodSearchMatchesByClassID = [:]
+            classSearchMatchesByClassID = [:]
             return
         }
 
         var results: [ObjectiveCClassBrowserTarget] = []
         results.reserveCapacity(candidates.count)
-        var methodMatches: [String: [ObjectiveCCanonicalMethod]] = [:]
+        var searchMatches: [String: ObjectiveCClassSearchMatch] = [:]
 
         for target in candidates {
-            if matchesClassMetadata(target, query: query) {
-                results.append(target)
-                continue
-            }
-
             let matchingMethods = target.methods.filter { method in
                 method.selector.localizedCaseInsensitiveContains(query)
                     || method.categoryNames.contains(where: {
                         $0.localizedCaseInsensitiveContains(query)
                     })
             }
-            if !matchingMethods.isEmpty {
+            let match = ObjectiveCClassSearchMatch(
+                matchesClassName: target.name.localizedCaseInsensitiveContains(query),
+                superclassName: target.superclassName?.localizedCaseInsensitiveContains(query)
+                    == true ? target.superclassName : nil,
+                imageName: target.imageName.localizedCaseInsensitiveContains(query)
+                    ? target.imageName : nil,
+                methods: matchingMethods,
+                categoryNames: target.categoryNames.filter {
+                    $0.localizedCaseInsensitiveContains(query)
+                }
+            )
+            if match.hasMatch {
                 results.append(target)
-                methodMatches[target.id] = matchingMethods
-                continue
-            }
-
-            if target.categoryNames.contains(where: {
-                $0.localizedCaseInsensitiveContains(query)
-            }) {
-                results.append(target)
+                searchMatches[target.id] = match
             }
         }
 
         filteredClasses = results
-        methodSearchMatchesByClassID = methodMatches
+        classSearchMatchesByClassID = searchMatches
     }
 
     private func resetClassBrowserQuery() {
@@ -1459,15 +1500,6 @@ final class WorkspaceModel: ObservableObject {
             return message
         }
         return "\(message)\n\n\(recoverySuggestion)"
-    }
-
-    private func matchesClassMetadata(
-        _ objectiveCClass: ObjectiveCClassBrowserTarget,
-        query: String
-    ) -> Bool {
-        objectiveCClass.name.localizedCaseInsensitiveContains(query)
-            || objectiveCClass.superclassName?.localizedCaseInsensitiveContains(query) == true
-            || objectiveCClass.imageName.localizedCaseInsensitiveContains(query)
     }
 
     private func updateProjectDraft(_ update: (inout PatchProjectDraft) -> Void) {

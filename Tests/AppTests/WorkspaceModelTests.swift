@@ -230,11 +230,46 @@ final class WorkspaceModelTests: XCTestCase {
             model.methodSearchMatches(for: methodMatchedClass).map(\.selector),
             ["sdkMethod"]
         )
+        let methodMatch = try XCTUnwrap(model.classSearchMatch(for: methodMatchedClass))
+        XCTAssertFalse(methodMatch.matchesClassName)
+        XCTAssertEqual(methodMatch.methods.map(\.selector), ["sdkMethod"])
+        model.selectClassSearchResult(methodMatchedClass)
+        let initialSelectionRequest = try XCTUnwrap(model.classSearchSelectionRequest)
+        XCTAssertEqual(model.initialMethodSearch(for: methodMatchedClass), "sdkMethod")
+
+        model.classSearch = "sdk"
+        let combinedMatchClass = try XCTUnwrap(model.filteredClasses.first)
+        let combinedMatch = try XCTUnwrap(model.classSearchMatch(for: combinedMatchClass))
+        XCTAssertTrue(combinedMatch.matchesClassName)
+        XCTAssertEqual(combinedMatch.methods.map(\.selector), ["sdkMethod"])
+        model.selectClassSearchResult(combinedMatchClass)
+        let updatedSelectionRequest = try XCTUnwrap(model.classSearchSelectionRequest)
+        XCTAssertNotEqual(updatedSelectionRequest.id, initialSelectionRequest.id)
+        XCTAssertEqual(model.initialMethodSearch(for: combinedMatchClass), "sdk")
 
         model.classSearch = "SDKClass"
         XCTAssertEqual(model.filteredClasses.map(\.name), ["SDKClass"])
         let classNameMatchedClass = try XCTUnwrap(model.filteredClasses.first)
         XCTAssertTrue(model.methodSearchMatches(for: classNameMatchedClass).isEmpty)
+        let classNameMatch = try XCTUnwrap(model.classSearchMatch(for: classNameMatchedClass))
+        XCTAssertTrue(classNameMatch.matchesClassName)
+        model.selectClassSearchResult(classNameMatchedClass)
+        XCTAssertEqual(model.initialMethodSearch(for: classNameMatchedClass), "")
+
+        model.classSearch = "NSObject"
+        let superclassMatchedClass = try XCTUnwrap(model.filteredClasses.first)
+        XCTAssertEqual(
+            model.classSearchMatch(for: superclassMatchedClass)?.superclassName,
+            "NSObject"
+        )
+
+        model.classSearch = "Fixture"
+        XCTAssertEqual(model.filteredClasses.count, 2)
+        XCTAssertTrue(
+            model.filteredClasses.allSatisfy {
+                model.classSearchMatch(for: $0)?.imageName == "Fixture"
+            }
+        )
 
         model.navigation = .objectiveCClass("class-sdk")
         XCTAssertEqual(model.selectedClass?.name, "SDKClass")
@@ -517,6 +552,14 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertEqual(categoryTarget.categoryNames, ["Extras"])
         XCTAssertEqual(categoryTarget.protocols, ["FeatureProviding"])
         XCTAssertEqual(model.methodSearchMatches(for: categoryTarget).count, 2)
+        let categoryMatch = try XCTUnwrap(model.classSearchMatch(for: categoryTarget))
+        XCTAssertEqual(categoryMatch.categoryNames, ["Extras"])
+        XCTAssertEqual(
+            categoryMatch.methods.map(\.selector),
+            ["featureEnabled", "setFeatureEnabled:"]
+        )
+        model.selectClassSearchResult(categoryTarget)
+        XCTAssertEqual(model.initialMethodSearch(for: categoryTarget), "Extras")
         let property = try XCTUnwrap(categoryTarget.properties.first)
         XCTAssertEqual(property.property.accessorSelectors.getter, "featureEnabled")
         XCTAssertEqual(property.property.accessorSelectors.setter, "setFeatureEnabled:")

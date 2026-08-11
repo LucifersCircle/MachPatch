@@ -241,8 +241,12 @@ private struct WorkspaceDetail: View {
                 if model.navigation == .build {
                     BuildWorkspaceView(model: model)
                 } else if let objectiveCClass = model.selectedClass {
-                    ClassBrowserView(objectiveCClass: objectiveCClass, model: model)
-                        .id(objectiveCClass.id)
+                    ClassBrowserView(
+                        objectiveCClass: objectiveCClass,
+                        model: model,
+                        initialMethodSearch: model.initialMethodSearch(for: objectiveCClass)
+                    )
+                    .id(objectiveCClass.id)
                 } else {
                     TargetSummaryView(loadedTarget: loadedTarget)
                 }

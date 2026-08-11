@@ -6,6 +6,18 @@ struct ClassBrowserView: View {
     @ObservedObject var model: WorkspaceModel
 
     @State private var methodSearch = ""
+    @State private var hoveredMethodID: String?
+    @State private var highlightedMethodSearchResultID: String?
+
+    init(
+        objectiveCClass: ObjectiveCClassBrowserTarget,
+        model: WorkspaceModel,
+        initialMethodSearch: String = ""
+    ) {
+        self.objectiveCClass = objectiveCClass
+        self.model = model
+        _methodSearch = State(initialValue: initialMethodSearch)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -38,6 +50,12 @@ struct ClassBrowserView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .navigationTitle(objectiveCClass.name)
+        .onAppear {
+            applyClassSearchSelectionRequest(model.classSearchSelectionRequest)
+        }
+        .onChange(of: model.classSearchSelectionRequest) { _, request in
+            applyClassSearchSelectionRequest(request)
+        }
     }
 
     private var classHeader: some View {
@@ -63,12 +81,15 @@ struct ClassBrowserView: View {
                     Text("Image: \(objectiveCClass.imageName)")
                     Text(
                         objectiveCClass.isLikelyAppDefined
-                            ? "Heuristic: likely app-defined"
-                            : "Heuristic: known third-party"
+                            ? "Likely app-defined"
+                            : "Likely third-party SDK"
                     )
                     .foregroundStyle(
                         objectiveCClass.isLikelyAppDefined
                             ? Color.accentColor : Color.secondary
+                    )
+                    .help(
+                        "A conservative name-based heuristic; this classification is not definitive."
                     )
                     if objectiveCClass.isObjectiveCVisibleSwift {
                         Text("Objective-C-visible Swift")
@@ -109,6 +130,17 @@ struct ClassBrowserView: View {
                 }
             }
         }
+        .onAppear {
+            refreshMethodSearchHighlight()
+        }
+        .onChange(of: methodSearch) { _, _ in
+            refreshMethodSearchHighlight()
+        }
+        .onChange(of: model.selectedMethodID) { _, selectedMethodID in
+            if selectedMethodID != nil {
+                highlightedMethodSearchResultID = nil
+            }
+        }
     }
 
     @ViewBuilder
@@ -136,16 +168,38 @@ struct ClassBrowserView: View {
         if !methods.isEmpty {
             Section("\(title) · \(methods.count)") {
                 ForEach(methods) { method in
-                    MethodListRow(
-                        method: method,
-                        isPatched: model.patch(
-                            className: objectiveCClass.name,
-                            method: method
-                        ) != nil
-                    )
-                    .id(method.id)
-                    .tag(method.id)
+                    methodRow(method)
                 }
+            }
+        }
+    }
+
+    private func methodRow(_ method: ObjectiveCCanonicalMethod) -> some View {
+        let isSelected = model.selectedMethodID == method.id
+        let isEmphasized =
+            !isSelected
+            && (hoveredMethodID == method.id
+                || (hoveredMethodID == nil
+                    && highlightedMethodSearchResultID == method.id))
+        return MethodListRow(
+            method: method,
+            isPatched: model.patch(
+                className: objectiveCClass.name,
+                method: method
+            ) != nil
+        )
+        .id(method.id)
+        .tag(method.id)
+        .listRowBackground(
+            isEmphasized ? Color.accentColor.opacity(0.14) : Color.clear
+        )
+        .animation(.easeOut(duration: 0.12), value: isEmphasized)
+        .onHover { isHovered in
+            if isHovered {
+                highlightedMethodSearchResultID = nil
+                hoveredMethodID = method.id
+            } else if hoveredMethodID == method.id {
+                hoveredMethodID = nil
             }
         }
     }
@@ -172,6 +226,24 @@ struct ClassBrowserView: View {
     private func revealMethod(_ method: ObjectiveCCanonicalMethod) {
         methodSearch = ""
         model.revealMethod(method)
+    }
+
+    private func refreshMethodSearchHighlight() {
+        hoveredMethodID = nil
+        let query = methodSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            highlightedMethodSearchResultID = nil
+            return
+        }
+        highlightedMethodSearchResultID =
+            filteredInstanceMethods.first?.id ?? filteredClassMethods.first?.id
+    }
+
+    private func applyClassSearchSelectionRequest(_ request: ClassSearchSelectionRequest?) {
+        guard let request, request.classID == objectiveCClass.id else { return }
+        methodSearch = request.methodSearch
+        refreshMethodSearchHighlight()
+        model.consumeClassSearchSelectionRequest(id: request.id)
     }
 
     private func scrollToMethod(
@@ -496,7 +568,7 @@ private struct MethodInspectorView: View {
                             value: String(signature.explicitArguments.count)
                         )
                         if let frameSize = signature.frameSize {
-                            LabeledContent("Frame size", value: String(frameSize))
+                            LabeledContent("Frame size (bytes)", value: String(frameSize))
                         }
                         ForEach(Array(signature.explicitArguments.enumerated()), id: \.offset) {
                             index, argument in
@@ -531,7 +603,7 @@ private struct MethodInspectorView: View {
                 }
 
                 if let implementationAddress = method.implementationAddress {
-                    inspectorSection("Implementation") {
+                    inspectorSection("Implementation Address") {
                         Text("0x\(String(implementationAddress, radix: 16))")
                             .font(.body.monospaced())
                             .textSelection(.enabled)

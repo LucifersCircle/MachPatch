@@ -42,6 +42,19 @@ struct ObjectiveCClassBrowserTarget: Equatable, Identifiable {
     }
 }
 
+struct ObjectiveCClassSearchMatch: Equatable {
+    let matchesClassName: Bool
+    let superclassName: String?
+    let imageName: String?
+    let methods: [ObjectiveCCanonicalMethod]
+    let categoryNames: [String]
+
+    var hasMatch: Bool {
+        matchesClassName || superclassName != nil || imageName != nil || !methods.isEmpty
+            || !categoryNames.isEmpty
+    }
+}
+
 enum ObjectiveCClassBrowserCatalog {
     static func targets(for analysis: ObjectiveCAnalysis) -> [ObjectiveCClassBrowserTarget] {
         let metadata = analysis.metadata

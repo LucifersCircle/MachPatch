@@ -159,13 +159,9 @@ struct TargetSidebar: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(imageDisplayName(image.image))
                                 .lineLimit(1)
-                            Text(image.image.relativePath)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
                             Text(imageSubtitle(image))
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
+                                .font(.caption)
+                                .foregroundStyle(imageSubtitleColor(image))
                                 .lineLimit(1)
                         }
                     } icon: {
@@ -230,7 +226,10 @@ struct TargetSidebar: View {
 
     private var pinnedTrailingScrollSpace: CGFloat {
         guard isClassBrowserControlsPinned else { return 0 }
-        let estimatedResultsHeight = CGFloat(model.filteredClasses.count) * 44 + 54
+        let estimatedRowsHeight = model.filteredClasses.reduce(CGFloat.zero) { height, target in
+            height + (model.methodSearchMatches(for: target).isEmpty ? 44 : 62)
+        }
+        let estimatedResultsHeight = estimatedRowsHeight + 54
         return max(sidebarViewportHeight - estimatedResultsHeight, 0)
     }
 
@@ -334,23 +333,25 @@ struct TargetSidebar: View {
     }
 
     private func imageSubtitle(_ loadedImage: LoadedTargetImage) -> String {
-        let kind: String =
-            switch loadedImage.image.kind {
-            case .mainExecutable: "Main executable"
-            case .dynamicFramework: "Framework"
-            case .appExtension: "App extension"
-            case .standaloneFramework: "Framework"
-            case .standaloneMachO: "Mach-O"
-            }
         switch loadedImage.inspectionState {
         case .available(let slices, _):
             let architectures = Array(Set(slices.map(\.architecture.rawValue))).sorted()
-            let encryption = slices.contains(where: \.encrypted) ? "encrypted" : "decrypted"
-            let metadata = loadedImage.image.hasBundleMetadata ? "metadata" : "no metadata"
-            return
-                "\(kind) · \(architectures.joined(separator: ", ")) · \(encryption) · \(metadata)"
+            let architectureSummary =
+                architectures.isEmpty ? "No Mach-O slices" : architectures.joined(separator: ", ")
+            return slices.contains(where: \.encrypted)
+                ? "\(architectureSummary) · Encrypted"
+                : architectureSummary
         case .failed:
-            return "\(kind) · inspection failed"
+            return "Inspection failed"
+        }
+    }
+
+    private func imageSubtitleColor(_ loadedImage: LoadedTargetImage) -> Color {
+        switch loadedImage.inspectionState {
+        case .available(let slices, _):
+            slices.contains(where: \.encrypted) ? .orange : .secondary
+        case .failed:
+            .red
         }
     }
 
@@ -432,10 +433,31 @@ struct TargetSidebar: View {
 
     private func imageHelp(_ loadedImage: LoadedTargetImage) -> String {
         switch loadedImage.inspectionState {
-        case .available:
-            loadedImage.image.relativePath
+        case .available(let slices, _):
+            let architectures = Array(Set(slices.map(\.architecture.rawValue))).sorted()
+            let architectureSummary =
+                architectures.isEmpty ? "Unavailable" : architectures.joined(separator: ", ")
+            let encryption = slices.contains(where: \.encrypted) ? "Encrypted" : "Not encrypted"
+            let metadata = loadedImage.image.hasBundleMetadata ? "Available" : "Not available"
+            return """
+                \(imageKindName(loadedImage.image.kind))
+                \(loadedImage.image.relativePath)
+                Architectures: \(architectureSummary)
+                Encryption: \(encryption)
+                Bundle metadata: \(metadata)
+                """
         case .failed(let message):
-            "\(loadedImage.image.relativePath)\n\(message)"
+            return "\(loadedImage.image.relativePath)\n\(message)"
+        }
+    }
+
+    private func imageKindName(_ kind: ResolvedImageKind) -> String {
+        switch kind {
+        case .mainExecutable: "Main executable"
+        case .dynamicFramework: "Dynamic framework"
+        case .appExtension: "App extension"
+        case .standaloneFramework: "Standalone framework"
+        case .standaloneMachO: "Standalone Mach-O"
         }
     }
 
@@ -580,7 +602,7 @@ struct TargetSidebar: View {
     }
 
     private func classRow(_ objectiveCClass: ObjectiveCClassBrowserTarget) -> some View {
-        let methodMatches = model.methodSearchMatches(for: objectiveCClass)
+        let searchMatch = model.classSearchMatch(for: objectiveCClass)
         let isSelected = model.navigation == .objectiveCClass(objectiveCClass.id)
         let isEmphasized =
             !isSelected
@@ -591,27 +613,7 @@ struct TargetSidebar: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(objectiveCClass.name)
                     .lineLimit(1)
-                if let firstMatch = methodMatches.first {
-                    Text(methodMatchSummary(firstMatch, total: methodMatches.count))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .help(methodMatchHelp(methodMatches))
-                } else if let superclass = objectiveCClass.superclassName {
-                    Text(superclass)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                } else if let categoryName = objectiveCClass.categoryNames.first {
-                    Text(
-                        objectiveCClass.categoryNames.count == 1
-                            ? categoryName
-                            : "\(categoryName) + \(objectiveCClass.categoryNames.count - 1) more"
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.purple)
-                    .lineLimit(1)
-                }
+                classRowSubtitle(objectiveCClass, searchMatch: searchMatch)
             }
         } icon: {
             Image(systemName: classIcon(objectiveCClass))
@@ -619,7 +621,13 @@ struct TargetSidebar: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
+        .help(classRowHelp(objectiveCClass, searchMatch: searchMatch))
         .tag(WorkspaceNavigation.objectiveCClass(objectiveCClass.id))
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                model.selectClassSearchResult(objectiveCClass)
+            }
+        )
         .listRowBackground(
             isEmphasized ? Color.accentColor.opacity(0.14) : Color.clear
         )
@@ -631,6 +639,59 @@ struct TargetSidebar: View {
             } else if hoveredClassID == objectiveCClass.id {
                 hoveredClassID = nil
             }
+        }
+    }
+
+    @ViewBuilder
+    private func classRowSubtitle(
+        _ objectiveCClass: ObjectiveCClassBrowserTarget,
+        searchMatch: ObjectiveCClassSearchMatch?
+    ) -> some View {
+        if let searchMatch, let firstMethod = searchMatch.methods.first {
+            Text(
+                "\(searchMatch.methods.count) matching method\(searchMatch.methods.count == 1 ? "" : "s")"
+            )
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            Text(methodDescription(firstMethod))
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        } else if let searchMatch, !searchMatch.matchesClassName {
+            if let categoryName = searchMatch.categoryNames.first {
+                Text(
+                    searchReasonSummary(
+                        "Category", value: categoryName, total: searchMatch.categoryNames.count)
+                )
+                .font(.caption)
+                .foregroundStyle(.purple)
+                .lineLimit(1)
+            } else if let superclass = searchMatch.superclassName {
+                Text("Superclass · \(superclass)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            } else if let imageName = searchMatch.imageName {
+                Text("Image · \(imageName)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        } else if let superclass = objectiveCClass.superclassName {
+            Text("Subclass of \(superclass)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        } else if let categoryName = objectiveCClass.categoryNames.first {
+            Text(
+                objectiveCClass.categoryNames.count == 1
+                    ? "Category target · \(categoryName)"
+                    : "Category target · \(categoryName) + \(objectiveCClass.categoryNames.count - 1) more"
+            )
+            .font(.caption)
+            .foregroundStyle(.purple)
+            .lineLimit(1)
         }
     }
 
@@ -659,18 +720,40 @@ struct TargetSidebar: View {
         return objectiveCClass.isLikelyAppDefined ? .accentColor : .secondary
     }
 
-    private func methodMatchSummary(_ method: ObjectiveCCanonicalMethod, total: Int) -> String {
+    private func methodDescription(_ method: ObjectiveCCanonicalMethod) -> String {
         let marker = method.kind == .instance ? "−" : "+"
-        let remainder = total > 1 ? " + \(total - 1) more" : ""
-        return "Method: \(marker)\(method.selector)\(remainder)"
+        return "\(marker)\(method.selector)"
     }
 
-    private func methodMatchHelp(_ methods: [ObjectiveCCanonicalMethod]) -> String {
-        "Matched methods:\n"
-            + methods.map {
-                let marker = $0.kind == .instance ? "−" : "+"
-                return "\(marker)\($0.selector)"
-            }.joined(separator: "\n")
+    private func searchReasonSummary(_ label: String, value: String, total: Int) -> String {
+        let remainder = total > 1 ? " + \(total - 1) more" : ""
+        return "\(label) · \(value)\(remainder)"
+    }
+
+    private func classRowHelp(
+        _ objectiveCClass: ObjectiveCClassBrowserTarget,
+        searchMatch: ObjectiveCClassSearchMatch?
+    ) -> String {
+        guard let searchMatch else {
+            return "\(objectiveCClass.name)\nImage: \(objectiveCClass.imageName)"
+        }
+
+        var reasons: [String] = []
+        if searchMatch.matchesClassName {
+            reasons.append("Class name: \(objectiveCClass.name)")
+        }
+        if let superclass = searchMatch.superclassName {
+            reasons.append("Superclass: \(superclass)")
+        }
+        if let imageName = searchMatch.imageName {
+            reasons.append("Image: \(imageName)")
+        }
+        reasons.append(contentsOf: searchMatch.categoryNames.map { "Category: \($0)" })
+        if !searchMatch.methods.isEmpty {
+            reasons.append("Matched methods:")
+            reasons.append(contentsOf: searchMatch.methods.map(methodDescription))
+        }
+        return reasons.joined(separator: "\n")
     }
 }
 

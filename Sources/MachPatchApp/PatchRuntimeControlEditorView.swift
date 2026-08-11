@@ -58,7 +58,7 @@ struct PatchRuntimeControlEditorView: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                     Label(
-                        "The last Patch or Original selection is restored automatically when the target launches.",
+                        "The last Patched or Disabled state is restored automatically when the target launches.",
                         systemImage: "arrow.clockwise.circle"
                     )
                     .font(.caption)
