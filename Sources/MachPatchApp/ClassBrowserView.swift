@@ -192,10 +192,13 @@ struct ClassBrowserView: View {
         )
         .id(method.id)
         .tag(method.id)
-        .listRowBackground(
-            isEmphasized ? Color.accentColor.opacity(0.14) : Color.clear
+        .hoverHighlight(
+            isActive: isEmphasized,
+            horizontalOutset: 6,
+            verticalOutset: 6,
+            cornerRadius: 12
         )
-        .animation(.easeOut(duration: 0.12), value: isEmphasized)
+        .listRowBackground(Color.clear)
         .onHover { isHovered in
             if isHovered {
                 highlightedMethodSearchResultID = nil

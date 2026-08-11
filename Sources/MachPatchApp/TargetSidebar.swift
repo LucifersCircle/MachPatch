@@ -2,6 +2,13 @@ import AppKit
 import MachPatchCore
 import SwiftUI
 
+private enum SidebarHoverItem: Equatable {
+    case openTarget
+    case target
+    case architecture(Int)
+    case image(String)
+}
+
 struct TargetSidebar: View {
     @ObservedObject var model: WorkspaceModel
     @State private var isBuildWorkspaceHovered = false
@@ -9,6 +16,7 @@ struct TargetSidebar: View {
     @State private var sidebarViewportHeight: CGFloat = 800
     @State private var hoveredClassID: String?
     @State private var highlightedSearchResultID: String?
+    @State private var hoveredSidebarItem: SidebarHoverItem?
     @FocusState private var isClassSearchFocused: Bool
 
     private static let classSearchControlsAnchor = "TargetSidebarClassSearchControlsAnchor"
@@ -85,6 +93,16 @@ struct TargetSidebar: View {
                 }
                 .buttonStyle(.plain)
                 .contentShape(Rectangle())
+                .hoverHighlight(
+                    isActive: hoveredSidebarItem == .openTarget,
+                    horizontalOutset: 6,
+                    verticalOutset: 6,
+                    cornerRadius: 12
+                )
+                .listRowBackground(Color.clear)
+                .onHover { isHovered in
+                    updateSidebarHover(.openTarget, isHovered: isHovered)
+                }
             }
         }
 
@@ -119,7 +137,19 @@ struct TargetSidebar: View {
             } icon: {
                 TargetIconView(iconData: loadedTarget.iconData, size: 24)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
             .tag(WorkspaceNavigation.target)
+            .hoverHighlight(
+                isActive: model.navigation != .target && hoveredSidebarItem == .target,
+                horizontalOutset: 6,
+                verticalOutset: 6,
+                cornerRadius: 12
+            )
+            .listRowBackground(Color.clear)
+            .onHover { isHovered in
+                updateSidebarHover(.target, isHovered: isHovered)
+            }
         }
     }
 
@@ -142,9 +172,23 @@ struct TargetSidebar: View {
                             supported: slice.supportedForPatching
                         )
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .disabled(!slice.supportedForPatching)
+                .contentShape(Rectangle())
+                .hoverHighlight(
+                    isActive: slice.supportedForPatching
+                        && hoveredSidebarItem == .architecture(slice.index),
+                    horizontalOutset: 6,
+                    verticalOutset: 6,
+                    cornerRadius: 12
+                )
+                .listRowBackground(Color.clear)
+                .onHover { isHovered in
+                    updateSidebarHover(.architecture(slice.index), isHovered: isHovered)
+                }
             }
         }
     }
@@ -172,6 +216,16 @@ struct TargetSidebar: View {
                 }
                 .buttonStyle(.plain)
                 .contentShape(Rectangle())
+                .hoverHighlight(
+                    isActive: hoveredSidebarItem == .image(image.id),
+                    horizontalOutset: 6,
+                    verticalOutset: 6,
+                    cornerRadius: 12
+                )
+                .listRowBackground(Color.clear)
+                .onHover { isHovered in
+                    updateSidebarHover(.image(image.id), isHovered: isHovered)
+                }
                 .help(imageHelp(image))
             }
 
@@ -208,6 +262,17 @@ struct TargetSidebar: View {
         }
         guard isClassBrowserControlsPinned else { return }
         proxy.scrollTo(Self.classResultsAnchor, anchor: .top)
+    }
+
+    private func updateSidebarHover(
+        _ item: SidebarHoverItem,
+        isHovered: Bool
+    ) {
+        if isHovered {
+            hoveredSidebarItem = item
+        } else if hoveredSidebarItem == item {
+            hoveredSidebarItem = nil
+        }
     }
 
     private func pinClassBrowser() {
@@ -306,20 +371,13 @@ struct TargetSidebar: View {
         .padding(.vertical, 9)
         .contentShape(Rectangle())
         .background(
-            isSelected
-                ? Color.accentColor
-                : Color.accentColor.opacity(isBuildWorkspaceHovered ? 0.16 : 0.08),
-            in: RoundedRectangle(cornerRadius: 8)
+            isSelected ? Color.accentColor : Color.clear,
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
         )
-        .overlay {
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(
-                    Color.accentColor.opacity(
-                        isSelected ? 0 : isBuildWorkspaceHovered ? 0.55 : 0.28
-                    ),
-                    lineWidth: 1
-                )
-        }
+        .hoverHighlight(
+            isActive: isBuildWorkspaceHovered && !isSelected,
+            showsIdleChrome: !isSelected
+        )
         .padding(8)
         .onHover { isBuildWorkspaceHovered = $0 }
     }
@@ -628,10 +686,13 @@ struct TargetSidebar: View {
                 model.selectClassSearchResult(objectiveCClass)
             }
         )
-        .listRowBackground(
-            isEmphasized ? Color.accentColor.opacity(0.14) : Color.clear
+        .hoverHighlight(
+            isActive: isEmphasized,
+            horizontalOutset: 6,
+            verticalOutset: 6,
+            cornerRadius: 12
         )
-        .animation(.easeOut(duration: 0.12), value: isEmphasized)
+        .listRowBackground(Color.clear)
         .onHover { isHovered in
             if isHovered {
                 highlightedSearchResultID = nil
