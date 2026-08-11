@@ -20,7 +20,7 @@ struct TargetSummaryView: View {
             .frame(maxWidth: 940, alignment: .leading)
             .padding(28)
         }
-        .navigationTitle(displayName)
+        .machPatchToolbarTitleHidden()
     }
 
     private func patchabilityDetails(_ report: ObjectiveCPatchabilityReport) -> some View {

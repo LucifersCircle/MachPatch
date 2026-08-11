@@ -50,7 +50,7 @@ struct ClassBrowserView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .navigationTitle(objectiveCClass.name)
+        .machPatchToolbarTitleHidden()
         .onAppear {
             applyClassSearchSelectionRequest(model.classSearchSelectionRequest)
         }
