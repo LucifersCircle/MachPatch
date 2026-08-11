@@ -130,7 +130,6 @@ final class WorkspaceModel: ObservableObject {
     private var classBrowserTargetsByName: [String: ObjectiveCClassBrowserTarget] = [:]
     private var classBrowserTargetsByFilter:
         [ObjectiveCClassFilter: [ObjectiveCClassBrowserTarget]] = [:]
-    private var classBrowserTargetIDsByFilter: [ObjectiveCClassFilter: Set<String>] = [:]
     private var methodSearchMatchesByClassID: [String: [ObjectiveCCanonicalMethod]] = [:]
     private var isClassBrowserRefreshSuspended = false
 
@@ -1248,7 +1247,6 @@ final class WorkspaceModel: ObservableObject {
             classBrowserTargetsByID = [:]
             classBrowserTargetsByName = [:]
             classBrowserTargetsByFilter = [:]
-            classBrowserTargetIDsByFilter = [:]
             filteredClasses = []
             methodSearchMatchesByClassID = [:]
             return
@@ -1271,9 +1269,6 @@ final class WorkspaceModel: ObservableObject {
                 return (filter, targets)
             }
         )
-        classBrowserTargetIDsByFilter = classBrowserTargetsByFilter.mapValues { targets in
-            Set(targets.map(\.id))
-        }
         refreshClassBrowserResults()
     }
 
@@ -1291,10 +1286,6 @@ final class WorkspaceModel: ObservableObject {
         guard !query.isEmpty else {
             filteredClasses = candidates
             methodSearchMatchesByClassID = [:]
-            reconcileClassSelection(
-                visibleClassIDs: classBrowserTargetIDsByFilter[classFilter]
-                    ?? Set(candidates.map(\.id))
-            )
             return
         }
 
@@ -1329,16 +1320,6 @@ final class WorkspaceModel: ObservableObject {
 
         filteredClasses = results
         methodSearchMatchesByClassID = methodMatches
-        reconcileClassSelection(visibleClassIDs: Set(results.map(\.id)))
-    }
-
-    private func reconcileClassSelection(visibleClassIDs: Set<String>) {
-        guard case .objectiveCClass(let classID) = navigation,
-            !visibleClassIDs.contains(classID)
-        else { return }
-        navigation = nil
-        selectedMethodID = nil
-        methodRevealRequest = nil
     }
 
     private func resetClassBrowserQuery() {

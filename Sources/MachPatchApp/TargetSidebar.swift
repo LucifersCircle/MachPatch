@@ -5,116 +5,64 @@ import SwiftUI
 struct TargetSidebar: View {
     @ObservedObject var model: WorkspaceModel
     @State private var isBuildWorkspaceHovered = false
+    @State private var isClassBrowserControlsPinned = false
+    @State private var sidebarViewportHeight: CGFloat = 800
+    @State private var hoveredClassID: String?
+    @State private var highlightedSearchResultID: String?
+    @FocusState private var isClassSearchFocused: Bool
+
+    private static let classSearchControlsAnchor = "TargetSidebarClassSearchControlsAnchor"
+    private static let classResultsAnchor = "TargetSidebarClassResultsAnchor"
+    private static let pinnedControlsHeight: CGFloat = 116
+    private static let scrollBarGutter: CGFloat = 14
 
     var body: some View {
         VStack(spacing: 0) {
-            List(selection: $model.navigation) {
-                Section {
-                    Button {
-                        model.chooseTarget()
-                    } label: {
-                        Label("Open Target…", systemImage: "folder.badge.plus")
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .contentShape(Rectangle())
+            ScrollViewReader { proxy in
+                List(selection: $model.navigation) {
+                    sidebarListContent
                 }
-
-                if case .loaded(let loadedTarget) = model.phase {
-                    Section("Target") {
-                        Label {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(displayName(for: loadedTarget))
-                                    .lineLimit(1)
-                                Text(loadedTarget.target.sourceType.rawValue.uppercased())
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        } icon: {
-                            TargetIconView(iconData: loadedTarget.iconData, size: 24)
-                        }
-                        .tag(WorkspaceNavigation.target)
+                .listStyle(.sidebar)
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: SidebarViewportHeightKey.self,
+                            value: proxy.size.height
+                        )
                     }
-
-                    Section("Architectures") {
-                        ForEach(loadedTarget.architectureReport.slices, id: \.index) { slice in
-                            Button {
-                                model.selectArchitecture(sliceIndex: slice.index)
-                            } label: {
-                                Label {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(slice.architecture.rawValue)
-                                        Text(slice.platform.rawValue)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                } icon: {
-                                    architectureIcon(
-                                        sliceIndex: slice.index,
-                                        supported: slice.supportedForPatching
-                                    )
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(!slice.supportedForPatching)
+                }
+                .overlay(alignment: .top) {
+                    HStack(alignment: .top, spacing: 0) {
+                        pinnedClassBrowserControls {
+                            unpinClassBrowser()
                         }
+                        Color.clear
+                            .frame(width: Self.scrollBarGutter)
+                            .allowsHitTesting(false)
                     }
-
-                    Section("Images") {
-                        ForEach(loadedTarget.images) { image in
-                            Button {
-                                model.selectImage(id: image.id)
-                            } label: {
-                                Label {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(imageDisplayName(image.image))
-                                            .lineLimit(1)
-                                        Text(image.image.relativePath)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(1)
-                                        Text(imageSubtitle(image))
-                                            .font(.caption2)
-                                            .foregroundStyle(.tertiary)
-                                            .lineLimit(1)
-                                    }
-                                } icon: {
-                                    imageStatusIcon(image, loadedTarget: loadedTarget)
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .contentShape(Rectangle())
-                            .help(imageHelp(image))
-                        }
-
-                        ForEach(
-                            Array(loadedTarget.target.imageDiscoveryIssues.enumerated()),
-                            id: \.offset
-                        ) { _, issue in
-                            Label {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(issue.relativeBundlePath)
-                                        .lineLimit(1)
-                                    Text(issue.message)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(2)
-                                }
-                            } icon: {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundStyle(.orange)
-                            }
-                            .help(issue.message)
-                        }
+                    .animation(.easeOut(duration: 0.18), value: isClassBrowserControlsPinned)
+                }
+                .onPreferenceChange(SidebarViewportHeightKey.self) { height in
+                    sidebarViewportHeight = height
+                }
+                .onChange(of: model.classSearch) { _, _ in
+                    handleClassQueryChange(with: proxy)
+                }
+                .onChange(of: model.classFilter) { _, _ in
+                    handleClassQueryChange(with: proxy)
+                }
+                .onChange(of: isClassBrowserControlsPinned) { _, isPinned in
+                    proxy.scrollTo(
+                        isPinned ? Self.classResultsAnchor : Self.classSearchControlsAnchor,
+                        anchor: .top
+                    )
+                }
+                .onChange(of: model.navigation) { _, navigation in
+                    if let navigation, case .objectiveCClass = navigation {
+                        highlightedSearchResultID = nil
                     }
-
-                    analysisNavigation(loadedTarget)
                 }
             }
-            .listStyle(.sidebar)
 
             if let projectDraft = model.projectDraft {
                 Divider()
@@ -122,6 +70,173 @@ struct TargetSidebar: View {
             }
         }
         .navigationTitle("MachPatch")
+    }
+
+    @ViewBuilder
+    private var sidebarListContent: some View {
+        if !isClassBrowserControlsPinned {
+            Section {
+                Button {
+                    model.chooseTarget()
+                } label: {
+                    Label("Open Target…", systemImage: "folder.badge.plus")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .contentShape(Rectangle())
+            }
+        }
+
+        if case .loaded(let loadedTarget) = model.phase {
+            if !isClassBrowserControlsPinned {
+                targetSection(loadedTarget)
+                architectureSection(loadedTarget)
+                imagesSection(loadedTarget)
+            }
+            analysisNavigation(loadedTarget)
+
+            if pinnedTrailingScrollSpace > 0 {
+                Color.clear
+                    .frame(height: pinnedTrailingScrollSpace)
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+
+    private func targetSection(_ loadedTarget: LoadedTarget) -> some View {
+        Section("Target") {
+            Label {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(displayName(for: loadedTarget))
+                        .lineLimit(1)
+                    Text(loadedTarget.target.sourceType.rawValue.uppercased())
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } icon: {
+                TargetIconView(iconData: loadedTarget.iconData, size: 24)
+            }
+            .tag(WorkspaceNavigation.target)
+        }
+    }
+
+    private func architectureSection(_ loadedTarget: LoadedTarget) -> some View {
+        Section("Architectures") {
+            ForEach(loadedTarget.architectureReport.slices, id: \.index) { slice in
+                Button {
+                    model.selectArchitecture(sliceIndex: slice.index)
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(slice.architecture.rawValue)
+                            Text(slice.platform.rawValue)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        architectureIcon(
+                            sliceIndex: slice.index,
+                            supported: slice.supportedForPatching
+                        )
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(!slice.supportedForPatching)
+            }
+        }
+    }
+
+    private func imagesSection(_ loadedTarget: LoadedTarget) -> some View {
+        Section("Images") {
+            ForEach(loadedTarget.images) { image in
+                Button {
+                    model.selectImage(id: image.id)
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(imageDisplayName(image.image))
+                                .lineLimit(1)
+                            Text(image.image.relativePath)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                            Text(imageSubtitle(image))
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                        }
+                    } icon: {
+                        imageStatusIcon(image, loadedTarget: loadedTarget)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .contentShape(Rectangle())
+                .help(imageHelp(image))
+            }
+
+            ForEach(
+                Array(loadedTarget.target.imageDiscoveryIssues.enumerated()),
+                id: \.offset
+            ) { _, issue in
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(issue.relativeBundlePath)
+                            .lineLimit(1)
+                        Text(issue.message)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                }
+                .help(issue.message)
+            }
+        }
+    }
+
+    private func handleClassQueryChange(with proxy: ScrollViewProxy) {
+        let query = model.classSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        hoveredClassID = nil
+        highlightedSearchResultID = query.isEmpty ? nil : firstDisplayedClassResult?.id
+
+        if !query.isEmpty, !isClassBrowserControlsPinned {
+            pinClassBrowser()
+            return
+        }
+        guard isClassBrowserControlsPinned else { return }
+        proxy.scrollTo(Self.classResultsAnchor, anchor: .top)
+    }
+
+    private func pinClassBrowser() {
+        withAnimation(.easeOut(duration: 0.16)) {
+            isClassBrowserControlsPinned = true
+        }
+        isClassSearchFocused = true
+    }
+
+    private func unpinClassBrowser() {
+        isClassSearchFocused = false
+        withAnimation(.easeOut(duration: 0.16)) {
+            isClassBrowserControlsPinned = false
+        }
+    }
+
+    private var pinnedTrailingScrollSpace: CGFloat {
+        guard isClassBrowserControlsPinned else { return 0 }
+        let estimatedResultsHeight = CGFloat(model.filteredClasses.count) * 44 + 54
+        return max(sidebarViewportHeight - estimatedResultsHeight, 0)
+    }
+
+    private var firstDisplayedClassResult: ObjectiveCClassBrowserTarget? {
+        model.filteredClasses.first(where: { !$0.isCategoryOnly })
+            ?? model.filteredClasses.first
     }
 
     private func buildWorkspaceControl(_ projectDraft: PatchProjectDraft) -> some View {
@@ -240,6 +355,56 @@ struct TargetSidebar: View {
     }
 
     @ViewBuilder
+    private func pinnedClassBrowserControls(onUnpin: @escaping () -> Void) -> some View {
+        if isClassBrowserControlsPinned,
+            let counts = classBrowserCounts
+        {
+            VStack(spacing: 2) {
+                HStack(spacing: 8) {
+                    Text("Class Search")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                    Button(action: onUnpin) {
+                        Label("Unpin", systemImage: "pin.slash")
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .help("Unpin search and show target details")
+                }
+                classBrowserControls(
+                    filteredCount: counts.filtered,
+                    totalCount: counts.total,
+                    pinsOnEditing: false
+                )
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 6)
+            .padding(.bottom, 5)
+            .background(.bar)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(Color.primary.opacity(0.14))
+                    .frame(height: 1)
+                    .allowsHitTesting(false)
+            }
+            .transition(.opacity)
+        }
+    }
+
+    private var classBrowserCounts: (filtered: Int, total: Int)? {
+        guard case .loaded(let loadedTarget) = model.phase,
+            case .loaded(let analysis) = loadedTarget.analysisState
+        else {
+            return nil
+        }
+        return (
+            model.filteredClasses.count(where: { !$0.isCategoryOnly }),
+            analysis.metadata.classes.count
+        )
+    }
+
+    @ViewBuilder
     private func imageStatusIcon(
         _ image: LoadedTargetImage,
         loadedTarget: LoadedTarget
@@ -296,24 +461,29 @@ struct TargetSidebar: View {
             let filteredCategoryTargets = model.filteredClasses.filter(\.isCategoryOnly)
             let categoryTargetCount = loadedTarget.classBrowserTargets.count(
                 where: \.isCategoryOnly)
-            Section {
-                TextField("Search classes or methods", text: $model.classSearch)
-                    .textFieldStyle(.roundedBorder)
-                    .padding(.horizontal, 4)
-                Picker("Class Filter", selection: $model.classFilter) {
-                    ForEach(ObjectiveCClassFilter.allCases) { filter in
-                        Text(filter.rawValue).tag(filter)
-                            .help(filter.helpText)
-                    }
+            if !isClassBrowserControlsPinned {
+                Section {
+                    classBrowserControls(
+                        filteredCount: filteredClasses.count,
+                        totalCount: analysis.metadata.classes.count,
+                        pinsOnEditing: true
+                    )
+                    .id(Self.classSearchControlsAnchor)
                 }
-                .labelsHidden()
-                .padding(.horizontal, 4)
-                .help(model.classFilter.helpText)
             }
 
             Section(
                 "Classes · \(filteredClasses.count) of \(analysis.metadata.classes.count)"
             ) {
+                Color.clear
+                    .frame(
+                        height: isClassBrowserControlsPinned ? Self.pinnedControlsHeight : 0
+                    )
+                    .id(Self.classResultsAnchor)
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .accessibilityHidden(true)
+
                 ForEach(filteredClasses) { objectiveCClass in
                     classRow(objectiveCClass)
                 }
@@ -364,8 +534,59 @@ struct TargetSidebar: View {
         }
     }
 
+    @ViewBuilder
+    private func classBrowserControls(
+        filteredCount: Int,
+        totalCount: Int,
+        pinsOnEditing: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            if pinsOnEditing {
+                TextField(
+                    "Search classes or methods",
+                    text: $model.classSearch,
+                    onEditingChanged: { isEditing in
+                        if isEditing {
+                            pinClassBrowser()
+                        }
+                    }
+                )
+                .textFieldStyle(.roundedBorder)
+                .simultaneousGesture(
+                    TapGesture().onEnded {
+                        pinClassBrowser()
+                    }
+                )
+            } else {
+                TextField("Search classes or methods", text: $model.classSearch)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($isClassSearchFocused)
+            }
+            Picker("Class Filter", selection: $model.classFilter) {
+                ForEach(ObjectiveCClassFilter.allCases) { filter in
+                    Text(filter.rawValue).tag(filter)
+                        .help(filter.helpText)
+                }
+            }
+            .labelsHidden()
+            .help(model.classFilter.helpText)
+            Text("Classes · \(filteredCount) of \(totalCount)")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+        .textCase(nil)
+        .padding(.horizontal, 4)
+        .padding(.vertical, 5)
+    }
+
     private func classRow(_ objectiveCClass: ObjectiveCClassBrowserTarget) -> some View {
         let methodMatches = model.methodSearchMatches(for: objectiveCClass)
+        let isSelected = model.navigation == .objectiveCClass(objectiveCClass.id)
+        let isEmphasized =
+            !isSelected
+            && (hoveredClassID == objectiveCClass.id
+                || (hoveredClassID == nil
+                    && highlightedSearchResultID == objectiveCClass.id))
         return Label {
             VStack(alignment: .leading, spacing: 2) {
                 Text(objectiveCClass.name)
@@ -396,7 +617,21 @@ struct TargetSidebar: View {
             Image(systemName: classIcon(objectiveCClass))
                 .foregroundStyle(classIconColor(objectiveCClass))
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
         .tag(WorkspaceNavigation.objectiveCClass(objectiveCClass.id))
+        .listRowBackground(
+            isEmphasized ? Color.accentColor.opacity(0.14) : Color.clear
+        )
+        .animation(.easeOut(duration: 0.12), value: isEmphasized)
+        .onHover { isHovered in
+            if isHovered {
+                highlightedSearchResultID = nil
+                hoveredClassID = objectiveCClass.id
+            } else if hoveredClassID == objectiveCClass.id {
+                hoveredClassID = nil
+            }
+        }
     }
 
     private func classIcon(_ objectiveCClass: ObjectiveCClassBrowserTarget) -> String {
@@ -436,5 +671,13 @@ struct TargetSidebar: View {
                 let marker = $0.kind == .instance ? "−" : "+"
                 return "\(marker)\($0.selector)"
             }.joined(separator: "\n")
+    }
+}
+
+private struct SidebarViewportHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }

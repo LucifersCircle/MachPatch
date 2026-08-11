@@ -198,7 +198,7 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertNil(model.patchProject)
     }
 
-    func testClassFiltersSearchMethodsAndSelection() async throws {
+    func testClassFiltersSearchMethodsAndPreserveSelection() async throws {
         let target = makeLoadedTarget()
         let analysis = makeAnalysis(for: target)
         let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
@@ -238,17 +238,21 @@ final class WorkspaceModelTests: XCTestCase {
 
         model.navigation = .objectiveCClass("class-sdk")
         XCTAssertEqual(model.selectedClass?.name, "SDKClass")
+        let selectedMethodID = try XCTUnwrap(model.selectedClass?.methods.first?.id)
+        model.selectedMethodID = selectedMethodID
 
         model.classSearch = ""
         model.classFilter = .likelyThirdPartySDK
         XCTAssertEqual(model.navigation, .objectiveCClass("class-sdk"))
 
         model.classFilter = .uikitSubclass
-        XCTAssertNil(model.navigation)
-        XCTAssertNil(model.selectedClass)
+        XCTAssertEqual(model.navigation, .objectiveCClass("class-sdk"))
+        XCTAssertEqual(model.selectedClass?.name, "SDKClass")
+        XCTAssertEqual(model.selectedMethodID, selectedMethodID)
 
         model.classFilter = .all
-        XCTAssertNil(model.navigation)
+        XCTAssertEqual(model.navigation, .objectiveCClass("class-sdk"))
+        XCTAssertEqual(model.selectedMethodID, selectedMethodID)
     }
 
     func testLargeClassSearchIsIndexedAndReusable() async throws {
