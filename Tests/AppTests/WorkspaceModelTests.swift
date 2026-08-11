@@ -209,6 +209,10 @@ final class WorkspaceModelTests: XCTestCase {
 
         XCTAssertEqual(model.classFilter, .all)
         XCTAssertEqual(model.filteredClasses.map(\.name), ["AppController", "SDKClass"])
+        XCTAssertEqual(model.classResultCount(for: .all), 2)
+        XCTAssertEqual(model.classResultCount(for: .likelyAppDefined), 1)
+        XCTAssertEqual(model.classResultCount(for: .likelyThirdPartySDK), 1)
+        XCTAssertEqual(model.classResultCount(for: .uikitSubclass), 1)
 
         model.classFilter = .likelyAppDefined
         XCTAssertEqual(model.filteredClasses.map(\.name), ["AppController"])
@@ -225,6 +229,10 @@ final class WorkspaceModelTests: XCTestCase {
         model.classFilter = .all
         model.classSearch = "sdkMethod"
         XCTAssertEqual(model.filteredClasses.map(\.name), ["SDKClass"])
+        XCTAssertEqual(model.classResultCount(for: .all), 1)
+        XCTAssertEqual(model.classResultCount(for: .likelyAppDefined), 0)
+        XCTAssertEqual(model.classResultCount(for: .likelyThirdPartySDK), 1)
+        XCTAssertEqual(model.classResultCount(for: .uikitSubclass), 0)
         let methodMatchedClass = try XCTUnwrap(model.filteredClasses.first)
         XCTAssertEqual(
             model.methodSearchMatches(for: methodMatchedClass).map(\.selector),
@@ -633,9 +641,13 @@ final class WorkspaceModelTests: XCTestCase {
 
         model.openTarget(at: loadedTarget.inputURL)
         await waitForLoadToFinish(model)
+        XCTAssertEqual(model.classResultCount(for: .all), 3)
+        XCTAssertEqual(model.classCategoryTargetResultCount(for: .all), 1)
         model.classSearch = "Extras"
 
         let categoryTarget = try XCTUnwrap(model.filteredClasses.first)
+        XCTAssertEqual(model.classResultCount(for: .all), 1)
+        XCTAssertEqual(model.classCategoryTargetResultCount(for: .all), 1)
         XCTAssertEqual(categoryTarget.name, "ExternalController")
         XCTAssertTrue(categoryTarget.isCategoryOnly)
         XCTAssertEqual(categoryTarget.categoryNames, ["Extras"])

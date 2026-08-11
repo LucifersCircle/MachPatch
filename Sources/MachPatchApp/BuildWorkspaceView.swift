@@ -10,6 +10,7 @@ struct BuildWorkspaceView: View {
     @State private var enabledPatchesExpanded = true
     @State private var disabledPatchesExpanded = false
     @State private var generatedSourceExpanded = true
+    @State private var hoveredPatchID: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -454,6 +455,7 @@ struct BuildWorkspaceView: View {
 
             HStack(spacing: 6) {
                 Button {
+                    hoveredPatchID = nil
                     model.updatePatch(patch.replacing(enabled: !patch.enabled))
                 } label: {
                     Label(
@@ -468,6 +470,7 @@ struct BuildWorkspaceView: View {
                 )
 
                 Button(role: .destructive) {
+                    hoveredPatchID = nil
                     model.requestDeletePatch(patch)
                 } label: {
                     Label("Delete", systemImage: "trash")
@@ -479,6 +482,24 @@ struct BuildWorkspaceView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .hoverHighlight(
+            isActive: hoveredPatchID == patch.id,
+            cornerRadius: 10
+        )
+        .onHover { isHovered in
+            if isHovered {
+                hoveredPatchID = patch.id
+            } else if hoveredPatchID == patch.id {
+                hoveredPatchID = nil
+            }
+        }
+        .onDisappear {
+            if hoveredPatchID == patch.id {
+                hoveredPatchID = nil
+            }
+        }
     }
 
     @ViewBuilder

@@ -552,8 +552,8 @@ struct TargetSidebar: View {
             let filteredCategoryTargets = model.filteredClasses.filter(\.isCategoryOnly)
             let categoryTargetCount = loadedTarget.classBrowserTargets.count(
                 where: \.isCategoryOnly)
-            if !isClassBrowserControlsPinned {
-                Section {
+            Section {
+                if !isClassBrowserControlsPinned {
                     classBrowserControls(
                         filteredCount: filteredClasses.count,
                         totalCount: analysis.metadata.classes.count,
@@ -561,19 +561,15 @@ struct TargetSidebar: View {
                     )
                     .id(Self.classSearchControlsAnchor)
                 }
-            }
 
-            Section(
-                "Classes · \(filteredClasses.count) of \(analysis.metadata.classes.count)"
-            ) {
-                Color.clear
-                    .frame(
-                        height: isClassBrowserControlsPinned ? Self.pinnedControlsHeight : 0
-                    )
-                    .id(Self.classResultsAnchor)
-                    .listRowInsets(EdgeInsets())
-                    .listRowSeparator(.hidden)
-                    .accessibilityHidden(true)
+                if isClassBrowserControlsPinned {
+                    Color.clear
+                        .frame(height: Self.pinnedControlsHeight)
+                        .id(Self.classResultsAnchor)
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                        .accessibilityHidden(true)
+                }
 
                 ForEach(filteredClasses) { objectiveCClass in
                     classRow(objectiveCClass)
@@ -653,14 +649,7 @@ struct TargetSidebar: View {
                     .textFieldStyle(.roundedBorder)
                     .focused($isClassSearchFocused)
             }
-            Picker("Class Filter", selection: $model.classFilter) {
-                ForEach(ObjectiveCClassFilter.allCases) { filter in
-                    Text(filter.rawValue).tag(filter)
-                        .help(filter.helpText)
-                }
-            }
-            .labelsHidden()
-            .help(model.classFilter.helpText)
+            classFilterMenu
             Text("Classes · \(filteredCount) of \(totalCount)")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
@@ -668,6 +657,77 @@ struct TargetSidebar: View {
         .textCase(nil)
         .padding(.horizontal, 4)
         .padding(.vertical, 5)
+    }
+
+    private var classFilterMenu: some View {
+        GeometryReader { proxy in
+            Menu {
+                ForEach(ObjectiveCClassFilter.allCases) { filter in
+                    Button {
+                        model.classFilter = filter
+                    } label: {
+                        if filter == model.classFilter {
+                            Label(
+                                classFilterMenuTitle(filter),
+                                systemImage: "checkmark"
+                            )
+                        } else {
+                            Text(classFilterMenuTitle(filter))
+                        }
+                    }
+                    .help(filter.helpText)
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Text(model.classFilter.rawValue)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    classFilterCountLabel(model.classFilter)
+                    Image(systemName: "chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 10)
+                .frame(width: proxy.size.width, height: 28)
+                .background(
+                    Color(nsColor: .controlBackgroundColor).opacity(0.72),
+                    in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                }
+                .contentShape(Rectangle())
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .help(model.classFilter.helpText)
+        }
+        .frame(height: 28)
+    }
+
+    private func classFilterMenuTitle(_ filter: ObjectiveCClassFilter) -> String {
+        let categoryTargetCount = model.classCategoryTargetResultCount(for: filter)
+        let classCount = model.classResultCount(for: filter) - categoryTargetCount
+        guard categoryTargetCount > 0 else {
+            return "\(filter.rawValue) (\(classCount))"
+        }
+        return "\(filter.rawValue) (\(classCount) + \(categoryTargetCount) category targets)"
+    }
+
+    @ViewBuilder
+    private func classFilterCountLabel(_ filter: ObjectiveCClassFilter) -> some View {
+        let categoryTargetCount = model.classCategoryTargetResultCount(for: filter)
+        let classCount = model.classResultCount(for: filter) - categoryTargetCount
+        HStack(spacing: 4) {
+            Text(classCount, format: .number)
+            if categoryTargetCount > 0 {
+                Text("+ \(categoryTargetCount) categories")
+            }
+        }
+        .foregroundStyle(.secondary)
+        .monospacedDigit()
     }
 
     private func classRow(_ objectiveCClass: ObjectiveCClassBrowserTarget) -> some View {

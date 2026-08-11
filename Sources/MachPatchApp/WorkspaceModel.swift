@@ -98,6 +98,9 @@ final class WorkspaceModel: ObservableObject {
         didSet { refreshClassBrowserResults() }
     }
     @Published private(set) var filteredClasses: [ObjectiveCClassBrowserTarget] = []
+    @Published private(set) var classFilterResultCounts: [ObjectiveCClassFilter: Int] = [:]
+    @Published private(set) var classFilterCategoryTargetResultCounts:
+        [ObjectiveCClassFilter: Int] = [:]
     @Published private(set) var projectDraft: PatchProjectDraft?
     @Published private(set) var savedPatchProjects: [SavedPatchProject] = []
     @Published var pendingSavedPatchDeletion: SavedPatchProject?
@@ -576,6 +579,14 @@ final class WorkspaceModel: ObservableObject {
         for objectiveCClass: ObjectiveCClassBrowserTarget
     ) -> ObjectiveCClassSearchMatch? {
         classSearchMatchesByClassID[objectiveCClass.id]
+    }
+
+    func classResultCount(for filter: ObjectiveCClassFilter) -> Int {
+        classFilterResultCounts[filter] ?? 0
+    }
+
+    func classCategoryTargetResultCount(for filter: ObjectiveCClassFilter) -> Int {
+        classFilterCategoryTargetResultCounts[filter] ?? 0
     }
 
     func initialMethodSearch(
@@ -1460,6 +1471,8 @@ final class WorkspaceModel: ObservableObject {
             classBrowserTargetsByName = [:]
             classBrowserTargetsByFilter = [:]
             filteredClasses = []
+            classFilterResultCounts = [:]
+            classFilterCategoryTargetResultCounts = [:]
             classSearchMatchesByClassID = [:]
             return
         }
@@ -1488,6 +1501,8 @@ final class WorkspaceModel: ObservableObject {
         guard !isClassBrowserRefreshSuspended else { return }
         guard case .loaded(let loadedTarget) = phase else {
             filteredClasses = []
+            classFilterResultCounts = [:]
+            classFilterCategoryTargetResultCounts = [:]
             classSearchMatchesByClassID = [:]
             return
         }
@@ -1497,15 +1512,27 @@ final class WorkspaceModel: ObservableObject {
             classBrowserTargetsByFilter[classFilter] ?? loadedTarget.classBrowserTargets
         guard !query.isEmpty else {
             filteredClasses = candidates
+            classFilterResultCounts = Dictionary(
+                uniqueKeysWithValues: ObjectiveCClassFilter.allCases.map { filter in
+                    (filter, classBrowserTargetsByFilter[filter]?.count ?? 0)
+                }
+            )
+            classFilterCategoryTargetResultCounts = Dictionary(
+                uniqueKeysWithValues: ObjectiveCClassFilter.allCases.map { filter in
+                    let count =
+                        classBrowserTargetsByFilter[filter]?.count(
+                            where: \.isCategoryOnly
+                        ) ?? 0
+                    return (filter, count)
+                }
+            )
             classSearchMatchesByClassID = [:]
             return
         }
 
-        var results: [ObjectiveCClassBrowserTarget] = []
-        results.reserveCapacity(candidates.count)
         var searchMatches: [String: ObjectiveCClassSearchMatch] = [:]
 
-        for target in candidates {
+        for target in loadedTarget.classBrowserTargets {
             let matchingMethods = target.methods.filter { method in
                 method.selector.localizedCaseInsensitiveContains(query)
                     || method.categoryNames.contains(where: {
@@ -1524,12 +1551,30 @@ final class WorkspaceModel: ObservableObject {
                 }
             )
             if match.hasMatch {
-                results.append(target)
                 searchMatches[target.id] = match
             }
         }
 
-        filteredClasses = results
+        let matchingClassIDs = Set(searchMatches.keys)
+        filteredClasses = candidates.filter { matchingClassIDs.contains($0.id) }
+        classFilterResultCounts = Dictionary(
+            uniqueKeysWithValues: ObjectiveCClassFilter.allCases.map { filter in
+                let count =
+                    classBrowserTargetsByFilter[filter]?.lazy.filter {
+                        matchingClassIDs.contains($0.id)
+                    }.count ?? 0
+                return (filter, count)
+            }
+        )
+        classFilterCategoryTargetResultCounts = Dictionary(
+            uniqueKeysWithValues: ObjectiveCClassFilter.allCases.map { filter in
+                let count =
+                    classBrowserTargetsByFilter[filter]?.lazy.filter {
+                        matchingClassIDs.contains($0.id) && $0.isCategoryOnly
+                    }.count ?? 0
+                return (filter, count)
+            }
+        )
         classSearchMatchesByClassID = searchMatches
     }
 
