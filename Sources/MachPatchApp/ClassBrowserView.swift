@@ -8,6 +8,7 @@ struct ClassBrowserView: View {
     @State private var methodSearch = ""
     @State private var hoveredMethodID: String?
     @State private var highlightedMethodSearchResultID: String?
+    @State private var methodScrollTask: Task<Void, Never>?
 
     init(
         objectiveCClass: ObjectiveCClassBrowserTarget,
@@ -55,6 +56,9 @@ struct ClassBrowserView: View {
         }
         .onChange(of: model.classSearchSelectionRequest) { _, request in
             applyClassSearchSelectionRequest(request)
+        }
+        .onDisappear {
+            methodScrollTask?.cancel()
         }
     }
 
@@ -121,12 +125,10 @@ struct ClassBrowserView: View {
                 }
                 .listStyle(.inset)
                 .onChange(of: model.methodRevealRequest) { _, request in
-                    guard let request else { return }
                     scrollToMethod(request, with: proxy)
                 }
                 .onAppear {
-                    guard let request = model.methodRevealRequest else { return }
-                    scrollToMethod(request, with: proxy)
+                    scrollToMethod(model.methodRevealRequest, with: proxy)
                 }
             }
         }
@@ -225,7 +227,7 @@ struct ClassBrowserView: View {
 
     private func revealMethod(_ method: ObjectiveCCanonicalMethod) {
         methodSearch = ""
-        model.revealMethod(method)
+        model.revealMethod(method, selectAfterScrolling: true)
     }
 
     private func refreshMethodSearchHighlight() {
@@ -247,18 +249,32 @@ struct ClassBrowserView: View {
     }
 
     private func scrollToMethod(
-        _ request: MethodRevealRequest,
+        _ request: MethodRevealRequest?,
         with proxy: ScrollViewProxy
     ) {
+        guard let request else { return }
         guard objectiveCClass.methods.contains(where: { $0.id == request.methodID }) else {
             return
         }
-        Task { @MainActor in
+        methodScrollTask?.cancel()
+        methodScrollTask = Task { @MainActor in
             await Task.yield()
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(20))
+            guard !Task.isCancelled else { return }
             withAnimation(.easeInOut(duration: 0.18)) {
                 proxy.scrollTo(request.methodID, anchor: .center)
             }
-            model.consumeMethodRevealRequest(id: request.id)
+            try? await Task.sleep(for: .milliseconds(110))
+            guard !Task.isCancelled else { return }
+            if request.selectsMethodAfterScrolling {
+                model.completeMethodRevealRequest(id: request.id)
+            } else {
+                model.consumeMethodRevealRequest(id: request.id)
+            }
+            try? await Task.sleep(for: .milliseconds(80))
+            guard !Task.isCancelled else { return }
+            proxy.scrollTo(request.methodID, anchor: .center)
         }
     }
 }

@@ -495,6 +495,28 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertNil(model.workspaceAlert)
     }
 
+    func testMethodRevealCanDeferSelectionUntilScrollingCompletes() async throws {
+        let target = makeLoadedTarget()
+        let analysis = makeAnalysis(for: target)
+        let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
+        let model = WorkspaceModel(loader: SuccessfulLoader(target: loadedTarget))
+
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+        let method = try XCTUnwrap(model.filteredClasses.first?.methods.first)
+
+        model.revealMethod(method, selectAfterScrolling: true)
+
+        let request = try XCTUnwrap(model.methodRevealRequest)
+        XCTAssertTrue(request.selectsMethodAfterScrolling)
+        XCTAssertNil(model.selectedMethodID)
+
+        model.completeMethodRevealRequest(id: request.id)
+
+        XCTAssertEqual(model.selectedMethodID, method.id)
+        XCTAssertNil(model.methodRevealRequest)
+    }
+
     func testCategoryOnlyTargetCanBeSearchedPatchedAndNavigated() async throws {
         let target = makeLoadedTarget()
         let baseAnalysis = makeAnalysis(for: target)

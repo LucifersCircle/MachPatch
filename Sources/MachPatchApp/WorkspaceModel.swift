@@ -10,6 +10,7 @@ import MachPatchVerifier
 struct MethodRevealRequest: Equatable, Identifiable {
     let id = UUID()
     let methodID: String
+    let selectsMethodAfterScrolling: Bool
 }
 
 struct ClassSearchSelectionRequest: Equatable, Identifiable {
@@ -946,14 +947,28 @@ final class WorkspaceModel: ObservableObject {
         navigation = .objectiveCClass(objectiveCClass.id)
     }
 
-    func revealMethod(_ method: ObjectiveCCanonicalMethod) {
+    func revealMethod(
+        _ method: ObjectiveCCanonicalMethod,
+        selectAfterScrolling: Bool = false
+    ) {
         classSearchSelectionRequest = nil
-        selectedMethodID = method.id
-        methodRevealRequest = MethodRevealRequest(methodID: method.id)
+        if !selectAfterScrolling {
+            selectedMethodID = method.id
+        }
+        methodRevealRequest = MethodRevealRequest(
+            methodID: method.id,
+            selectsMethodAfterScrolling: selectAfterScrolling
+        )
     }
 
     func consumeMethodRevealRequest(id: UUID) {
         guard methodRevealRequest?.id == id else { return }
+        methodRevealRequest = nil
+    }
+
+    func completeMethodRevealRequest(id: UUID) {
+        guard let request = methodRevealRequest, request.id == id else { return }
+        selectedMethodID = request.methodID
         methodRevealRequest = nil
     }
 
