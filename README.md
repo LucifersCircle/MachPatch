@@ -1,17 +1,135 @@
 # MachPatch
 
-MachPatch is an Apple Silicon macOS tool for inspecting decrypted iOS applications and
-building self-contained Objective-C runtime patch dylibs through a native SwiftUI app and a
-scriptable command-line interface.
+MachPatch is an Apple Silicon macOS application for inspecting decrypted iOS software and
+building self-contained Objective-C runtime patch dylibs. It provides a native SwiftUI workflow
+for interactive use and a scriptable command-line interface for automation.
+
+![MachPatch inspecting and editing a method patch](docs/images/method-editor.png)
+
+## Highlights
+
+- Open a decrypted IPA, extracted `.app`, `.framework`, or Mach-O executable without executing
+  its contents.
+- Inspect device architectures, encryption state, embedded images, Objective-C classes,
+  Objective-C-visible Swift classes, categories, methods, properties, protocols, and ivars.
+- Search classes and methods, decode type encodings, and see exactly which patch actions are safe
+  for a method's complete ABI signature.
+- Create type-aware returns, original-call patches, argument replacements, conditions, counters,
+  alerts, logging, Foundation object values, and expert Objective-C snippets.
+- Build an iPhoneOS dylib with Xcode, verify it against the selected target, and export or share the
+  result for LiveContainer testing.
+- Optionally expose selected patches through an in-app Patch/Original control panel.
+- Save projects in MachPatch's private library or import/export the canonical versioned JSON.
+
+## How it works
+
+- **Class browsing is static and offline.** MachPatch does not launch, attach to, or inject into a
+  target while populating the browser. It extracts Objective-C metadata from the decrypted Mach-O
+  using LIEF Extended when available, or Apple's `xcrun otool -ov` plus exact
+  `__objc_methname`/`__objc_selrefs` resolution as the built-in fallback. Classes registered only
+  at runtime therefore cannot appear in the offline browser. Generated patches for an already
+  known class can still tolerate delayed registration through bounded installer retries.
+- **Method changes are installed at runtime.** MachPatch generates ABI-matched Objective-C
+  replacement functions. When the dylib loads, each installer resolves the class and selector,
+  verifies the complete runtime type encoding, then installs the replacement IMP with
+  `class_addMethod` or `method_setImplementation`. Actions that call the original retain its typed
+  IMP. MachPatch does not rewrite ARM64 instructions, relocations, or the target binary's
+  `__TEXT` section.
+- **The primary output is a standalone dylib.** The generated iPhoneOS library has an
+  `@rpath/<name>.dylib` install name and is intended for a compatible loader such as LiveContainer.
+  MachPatch builds and verifies the artifact but does not modify, repack, decrypt, or sign the
+  target app, and it does not manage the target process or configure injection itself. The optional
+  Debian package wraps the same dylib with a bundle filter; the dylib does not link against a
+  jailbreak hooking framework.
+- **The stack is native.** MachPatch is a modular Swift 6 package with a SwiftUI macOS app and a
+  Swift command-line interface. Generated patches are Objective-C built by Xcode Clang against
+  Foundation, UIKit when needed, and Apple's Objective-C runtime. There is no Frida agent, Theos,
+  Logos, Substrate, ElleKit, or libhooker implementation under the hood.
+
+For deeper implementation details, see [Architecture](docs/architecture.md) and the
+[LiveContainer workflow](docs/livecontainer.md).
 
 ## Requirements
 
-- Apple Silicon Mac
-- macOS 14 or later
-- Xcode with the iPhoneOS SDK
-- Swift 6.0 or later
+### Using the packaged app
 
-## Build and test
+- Apple Silicon Mac running macOS 14 or later.
+- A decrypted iOS target that you are authorized to inspect and modify. MachPatch does not decrypt
+  applications.
+- Xcode with the iPhoneOS SDK to compile, verify, and package device dylibs.
+
+### Building from source
+
+- Xcode with Swift 6.0 or later.
+- The same Apple Silicon and macOS requirements as the packaged app.
+
+## Install
+
+Download the arm64 DMG and its `.sha256` file from the
+[latest GitHub release](../../releases/latest). Verify both files from the same directory:
+
+```bash
+shasum -a 256 -c MachPatch-0.1.0-macOS-arm64.dmg.sha256
+```
+
+Open the DMG and drag **MachPatch** to **Applications**.
+
+Official packages are ad-hoc signed and are not Apple-notarized. On first launch, macOS may block
+the app until you approve it in **System Settings > Privacy & Security**. Download releases only
+from the official repository, verify the published checksum, and do not disable Gatekeeper
+globally.
+
+## Quick start
+
+### 1. Open a target
+
+Choose **Open Target…** in the sidebar or **File > Open Target…**, then select a decrypted IPA,
+an extracted app, a framework, or a Mach-O executable. MachPatch identifies the host target,
+embedded images, supported device architectures, minimum iOS version, encryption state, and exact
+SHA-256 identities.
+
+![MachPatch target and embedded-image overview](docs/images/target-overview.png)
+
+Select the main executable, an embedded framework, or an app extension to analyze that exact
+image. MachPatch caches completed analysis while the target remains open.
+
+### 2. Inspect a method and create a patch
+
+Search all classes and methods or apply the app-defined and language filters. Select a method to
+inspect its raw encoding, decoded signature, declaration origins, compatible actions, and
+implementation address. Choose **Create Patch**, select an action, and optionally add advanced
+behavior or an in-app control.
+
+The patch editor keeps unsupported actions visible with an explanation, validates every configured
+value, and regenerates the source preview from the canonical project model.
+
+### 3. Build, verify, and export
+
+Open **Build Workspace** to review enabled and disabled patches, configure project settings and
+in-app controls, and inspect the generated Objective-C source. **Build Dylib** compiles with the
+selected Xcode iPhoneOS toolchain and immediately runs the LiveContainer compatibility checks.
+
+![MachPatch successful build, verification, and export workspace](docs/images/build-and-verify.png)
+
+A passing build can be exported or shared as a plain dylib. Reproducible source archives and
+ordinary-arm64 Debian packages are available as optional formats.
+
+### 4. Use optional runtime controls
+
+Patches marked **Show in target app** appear in the generated floating control panel. Each switch
+selects the configured patch or the original implementation for future invocations. Controls are
+remembered between launches, and a hidden floating button can be restored by holding three fingers
+for three seconds when VoiceOver is not active.
+
+<p align="center">
+  <img src="docs/images/runtime-controls.jpg" width="360" alt="MachPatch runtime controls inside an iOS target">
+</p>
+
+Changes apply on the next method call; the target may need to be restarted if it already cached or
+persisted an earlier result. The screenshots above use the MIT-licensed
+[Space Charge](https://github.com/banghuazhao/space-charge) project as an authorized test target.
+
+## Build and test from source
 
 ```bash
 swift build
@@ -20,7 +138,7 @@ swift test
 .build/debug/machpatch --version
 ```
 
-Create a signed release `.app` bundle, including the production macOS icon, with:
+Create an ad-hoc-signed release `.app` bundle, including the production macOS icon, with:
 
 ```bash
 Scripts/package-app.sh
@@ -38,12 +156,13 @@ The **Release** GitHub Actions workflow can be run manually to prove the build a
 as a workflow artifact. Pushing a tag matching the bundle version, such as `v0.1.0`, also creates a
 GitHub Release with the DMG and SHA-256 attached directly.
 
-Official MachPatch packages are ad-hoc signed and are not Apple-notarized. macOS Gatekeeper may
-require explicit approval in **System Settings > Privacy & Security** before the first launch.
-Download releases only from the official repository and verify the published SHA-256 checksum.
-Do not disable Gatekeeper globally.
+## Command-line interface
 
-## Resolve an input
+The native app and CLI share the same analysis, validation, generation, build, verification, and
+packaging libraries. CLI commands emit deterministic output suitable for scripts and independent
+frontends.
+
+### Resolve an input
 
 `resolve` accepts a decrypted IPA, an iOS `.app` directory, a `.framework` bundle, or a direct
 Mach-O executable:
@@ -89,7 +208,7 @@ embedded frameworks, supported app extensions, and frameworks nested inside thos
 without executing bundle content. Unsafe or malformed embedded candidates are retained as
 discovery diagnostics instead of hiding the valid host image.
 
-## Inspect Mach-O metadata
+### Inspect Mach-O metadata
 
 `inspect` resolves the input and parses every thin or fat Mach-O slice without relying on `lipo`
 or `otool`:
@@ -123,7 +242,7 @@ For example, an ordinary decrypted device executable reports facts such as:
 }
 ```
 
-## Inspect Objective-C metadata
+### Inspect Objective-C metadata
 
 `classes` emits stable JSON summaries for Objective-C classes in the selected executable slice:
 
@@ -155,9 +274,9 @@ references against the executable's method name and selector-reference sections;
 a global selector to a class without an address relationship.
 
 Both commands reject an encrypted slice before metadata extraction. `--json` is accepted for
-script compatibility; JSON is the only output format during the CLI-first implementation.
+script compatibility; JSON is the output format for both commands.
 
-## Measure patchability
+### Measure patchability
 
 `patchability` classifies every Objective-C method declaration using the same signature rules as
 project validation and the patch editor:
@@ -168,13 +287,15 @@ project validation and the patch editor:
 ```
 
 Human-readable output summarizes declarations available in the editor, compatible category
-declarations available under **Category Targets**, unavailable declarations, reason counts, and the most
-common unsupported ABI types. `--json` emits the complete deterministic report, including every
-class/category origin, selector, raw and decoded signature, compatible action list, and exact
-unavailable issues. Counts describe metadata declarations; a class and category that declare the
-same runtime selector are intentionally separate until category canonicalization is implemented.
+declarations available under **Category Targets**, unavailable declarations, reason counts, and
+the most common unsupported ABI types. `--json` emits the complete deterministic report, including
+every class/category origin, selector, raw and decoded signature, compatible action list, and exact
+unavailable issues. Report counts describe source metadata declarations, so class and category
+origins remain independently measurable. The app canonicalizes matching declarations by runtime
+class, method kind, and selector while preserving every origin; conflicting encodings remain
+visible but unavailable for patching.
 
-## Validate a patch project
+### Validate a patch project
 
 Patch projects are versioned JSON with immutable target identity, build settings, method patches,
 and type-safe actions. Validate the schema and action/type compatibility with:
@@ -191,9 +312,9 @@ slice, and raw type encoding:
 ```
 
 See [docs/patch-format.md](docs/patch-format.md) for the version 1 schema, supported actions, and
-MVP type rules.
+type-safety rules.
 
-## Generate Objective-C source
+### Generate Objective-C source
 
 Generate a self-contained native runtime patch source file from a valid project:
 
@@ -225,7 +346,7 @@ pointers or invoke blocks. Exact 64-bit `CGPoint`, `CGSize`, `CGRect`, and `NSRa
 typed pass-through and field logging. Pointer/block returns and arbitrary structures remain
 unavailable.
 
-## Build a device dylib
+### Build a device dylib
 
 Inspect a target's device slices, then build with the active Xcode iPhoneOS toolchain:
 
@@ -250,7 +371,7 @@ and invokes `lipo` only after both pass. Legacy unversioned arm64e and simulator
 with diagnostics. Rebuilding removes stale products first, and failures leave no partial dylib.
 Every compiler and merge process uses argument arrays without a shell.
 
-## Verify LiveContainer compatibility
+### Verify LiveContainer compatibility
 
 Audit a built dylib by itself or compare it with the current IPA, app, or executable:
 
