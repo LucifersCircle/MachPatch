@@ -271,10 +271,10 @@ final class WorkspaceModelTests: XCTestCase {
             }
         )
 
-        model.navigation = .objectiveCClass("class-sdk")
+        model.navigate(to: .objectiveCClass("class-sdk"))
         XCTAssertEqual(model.selectedClass?.name, "SDKClass")
         let selectedMethodID = try XCTUnwrap(model.selectedClass?.methods.first?.id)
-        model.selectedMethodID = selectedMethodID
+        model.selectMethod(id: selectedMethodID)
 
         model.classSearch = ""
         model.classFilter = .likelyThirdPartySDK
@@ -477,7 +477,7 @@ final class WorkspaceModelTests: XCTestCase {
         await waitForLoadToFinish(model)
         let method = try XCTUnwrap(analysis.metadata.classes.first?.instanceMethods.first)
         let patch = try model.addPatch(className: "AppController", method: method)
-        model.navigation = .build
+        model.navigate(to: .build)
 
         model.inspectPatch(patch)
 
@@ -495,6 +495,72 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertNil(model.workspaceAlert)
     }
 
+    func testWorkspaceNavigationHistoryRestoresClassesAndMethods() async throws {
+        let target = makeLoadedTarget()
+        let analysis = makeAnalysis(for: target)
+        let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
+        let model = WorkspaceModel(loader: SuccessfulLoader(target: loadedTarget))
+
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+        let objectiveCClass = try XCTUnwrap(
+            model.filteredClasses.first(where: { $0.id == "class-app" })
+        )
+        let method = try XCTUnwrap(objectiveCClass.methods.first)
+
+        XCTAssertFalse(model.canNavigateBack)
+        XCTAssertFalse(model.canNavigateForward)
+
+        model.selectClassSearchResult(objectiveCClass)
+        model.selectMethod(id: method.id)
+        model.navigate(to: .build)
+
+        XCTAssertEqual(model.backNavigationTitle, "AppController · \(method.selector)")
+        model.navigateBack()
+
+        XCTAssertEqual(model.navigation, .objectiveCClass(objectiveCClass.id))
+        XCTAssertEqual(model.selectedMethodID, method.id)
+        XCTAssertEqual(model.methodRevealRequest?.methodID, method.id)
+
+        model.navigateBack()
+
+        XCTAssertEqual(model.navigation, .objectiveCClass(objectiveCClass.id))
+        XCTAssertNil(model.selectedMethodID)
+        XCTAssertTrue(model.canNavigateForward)
+
+        model.navigateForward()
+
+        XCTAssertEqual(model.selectedMethodID, method.id)
+        XCTAssertEqual(model.forwardNavigationTitle, "Build Workspace")
+
+        model.classSearch = "sdk"
+        model.classFilter = .likelyThirdPartySDK
+        XCTAssertTrue(model.canNavigateForward)
+
+        model.navigate(to: .target)
+        XCTAssertFalse(model.canNavigateForward)
+    }
+
+    func testOpeningAnotherTargetResetsNavigationHistory() async throws {
+        let target = makeLoadedTarget()
+        let analysis = makeAnalysis(for: target)
+        let loadedTarget = target.replacingAnalysisState(.loaded(analysis))
+        let model = WorkspaceModel(loader: SuccessfulLoader(target: loadedTarget))
+
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+        let objectiveCClass = try XCTUnwrap(model.filteredClasses.first)
+        model.selectClassSearchResult(objectiveCClass)
+        XCTAssertTrue(model.canNavigateBack)
+
+        model.openTarget(at: loadedTarget.inputURL)
+        await waitForLoadToFinish(model)
+
+        XCTAssertEqual(model.navigation, .target)
+        XCTAssertFalse(model.canNavigateBack)
+        XCTAssertFalse(model.canNavigateForward)
+    }
+
     func testMethodRevealCanDeferSelectionUntilScrollingCompletes() async throws {
         let target = makeLoadedTarget()
         let analysis = makeAnalysis(for: target)
@@ -504,6 +570,7 @@ final class WorkspaceModelTests: XCTestCase {
         model.openTarget(at: loadedTarget.inputURL)
         await waitForLoadToFinish(model)
         let method = try XCTUnwrap(model.filteredClasses.first?.methods.first)
+        model.navigate(to: .objectiveCClass("class-app"))
 
         model.revealMethod(method, selectAfterScrolling: true)
 
@@ -590,7 +657,7 @@ final class WorkspaceModelTests: XCTestCase {
             categoryTarget.method(kind: .instance, selector: "featureEnabled")
         )
         let patch = try model.addPatch(className: categoryTarget.name, method: method)
-        model.navigation = .build
+        model.navigate(to: .build)
         model.inspectPatch(patch)
 
         XCTAssertEqual(model.navigation, .objectiveCClass(categoryTarget.id))
@@ -607,7 +674,7 @@ final class WorkspaceModelTests: XCTestCase {
 
         model.openTarget(at: loadedTarget.inputURL)
         await waitForLoadToFinish(model)
-        model.navigation = .build
+        model.navigate(to: .build)
         let missingPatch = MethodPatch(
             id: UUID().uuidString,
             enabled: true,
@@ -1206,7 +1273,7 @@ final class WorkspaceModelTests: XCTestCase {
         try PatchProjectCodec.encode(savedProject).write(to: projectURL)
 
         model.removePatch(id: try XCTUnwrap(savedProject.patches.first?.id))
-        model.navigation = .build
+        model.navigate(to: .build)
         model.exportPatch()
         XCTAssertTrue(model.isProjectExporterPresented)
         model.isProjectExporterPresented = false

@@ -13,6 +13,35 @@ struct MachPatchRootView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 900, minHeight: 620)
+        .toolbar {
+            ToolbarItemGroup(placement: .navigation) {
+                Button {
+                    model.navigateBack()
+                } label: {
+                    Label("Back", systemImage: "chevron.backward")
+                        .labelStyle(.iconOnly)
+                }
+                .disabled(!model.canNavigateBack)
+                .help(
+                    model.canNavigateBack
+                        ? "Back to \(model.backNavigationTitle)" : "Back"
+                )
+                .keyboardShortcut("[", modifiers: .command)
+
+                Button {
+                    model.navigateForward()
+                } label: {
+                    Label("Forward", systemImage: "chevron.forward")
+                        .labelStyle(.iconOnly)
+                }
+                .disabled(!model.canNavigateForward)
+                .help(
+                    model.canNavigateForward
+                        ? "Forward to \(model.forwardNavigationTitle)" : "Forward"
+                )
+                .keyboardShortcut("]", modifiers: .command)
+            }
+        }
         .fileImporter(
             isPresented: $model.isImporterPresented,
             allowedContentTypes: [.item],

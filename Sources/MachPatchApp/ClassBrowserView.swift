@@ -119,7 +119,7 @@ struct ClassBrowserView: View {
                 .padding(12)
             Divider()
             ScrollViewReader { proxy in
-                List(selection: $model.selectedMethodID) {
+                List(selection: methodSelection) {
                     methodSection("Instance Methods", methods: filteredInstanceMethods)
                     methodSection("Class Methods", methods: filteredClassMethods)
                 }
@@ -220,6 +220,13 @@ struct ClassBrowserView: View {
     private var selectedMethod: ObjectiveCCanonicalMethod? {
         guard let selectedMethodID = model.selectedMethodID else { return nil }
         return objectiveCClass.methods.first { $0.id == selectedMethodID }
+    }
+
+    private var methodSelection: Binding<String?> {
+        Binding(
+            get: { model.selectedMethodID },
+            set: { model.selectMethod(id: $0) }
+        )
     }
 
     private func filtered(

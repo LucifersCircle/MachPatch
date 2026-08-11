@@ -27,7 +27,7 @@ struct TargetSidebar: View {
     var body: some View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
-                List(selection: $model.navigation) {
+                List(selection: navigationSelection) {
                     sidebarListContent
                 }
                 .listStyle(.sidebar)
@@ -308,7 +308,7 @@ struct TargetSidebar: View {
         let selectedText = Color(nsColor: .alternateSelectedControlTextColor)
         return HStack(spacing: 4) {
             Button {
-                model.navigation = .build
+                model.navigate(to: .build)
             } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "hammer.fill")
@@ -384,6 +384,17 @@ struct TargetSidebar: View {
 
     private func displayName(for loadedTarget: LoadedTarget) -> String {
         loadedTarget.target.displayName ?? loadedTarget.target.executableName
+    }
+
+    private var navigationSelection: Binding<WorkspaceNavigation?> {
+        Binding(
+            get: { model.navigation },
+            set: { destination in
+                if let destination {
+                    model.navigate(to: destination)
+                }
+            }
+        )
     }
 
     private func imageDisplayName(_ image: ResolvedImage) -> String {

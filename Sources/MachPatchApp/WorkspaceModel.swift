@@ -86,8 +86,9 @@ final class WorkspaceModel: ObservableObject {
     }
     @Published var isImporterPresented = false
     @Published private(set) var isDropTargeted = false
-    @Published var navigation: WorkspaceNavigation? = .target
-    @Published var selectedMethodID: String?
+    @Published private(set) var navigation: WorkspaceNavigation? = .target
+    @Published private(set) var selectedMethodID: String?
+    @Published private(set) var navigationHistory = WorkspaceNavigationHistory()
     @Published private(set) var methodRevealRequest: MethodRevealRequest?
     @Published private(set) var classSearchSelectionRequest: ClassSearchSelectionRequest?
     @Published var classSearch = "" {
@@ -151,7 +152,82 @@ final class WorkspaceModel: ObservableObject {
         self.buildService = buildService
         self.verificationService = verificationService
         self.projectLibrary = projectLibrary
+        navigationHistory.reset(
+            to: WorkspaceNavigationLocation(destination: .target)
+        )
         refreshSavedPatchProjects(reportErrors: false)
+    }
+
+    var canNavigateBack: Bool { navigationHistory.canGoBack }
+
+    var canNavigateForward: Bool { navigationHistory.canGoForward }
+
+    var backNavigationTitle: String {
+        navigationHistory.backStack.last.map(navigationTitle) ?? "Back"
+    }
+
+    var forwardNavigationTitle: String {
+        navigationHistory.forwardStack.last.map(navigationTitle) ?? "Forward"
+    }
+
+    func navigate(to destination: WorkspaceNavigation) {
+        let methodID: String?
+        if case .objectiveCClass(let classID) = destination,
+            navigation == .objectiveCClass(classID)
+        {
+            methodID = selectedMethodID
+        } else {
+            methodID = nil
+        }
+        let location = WorkspaceNavigationLocation(
+            destination: destination,
+            methodID: methodID
+        )
+        guard applyNavigation(location, revealsMethod: false, resetsMethodSearch: false) else {
+            return
+        }
+        recordNavigationVisit(location)
+    }
+
+    func selectMethod(id methodID: String?) {
+        guard case .objectiveCClass(let classID) = navigation,
+            let objectiveCClass = classBrowserTargetsByID[classID]
+        else { return }
+        if let methodID,
+            !objectiveCClass.methods.contains(where: { $0.id == methodID })
+        {
+            return
+        }
+        selectedMethodID = methodID
+        methodRevealRequest = nil
+        recordNavigationVisit(
+            WorkspaceNavigationLocation(
+                destination: .objectiveCClass(classID),
+                methodID: methodID
+            )
+        )
+    }
+
+    func navigateBack() {
+        var history = navigationHistory
+        while let location = history.goBack() {
+            if applyNavigation(location, revealsMethod: true, resetsMethodSearch: true) {
+                navigationHistory = history
+                return
+            }
+        }
+        navigationHistory = history
+    }
+
+    func navigateForward() {
+        var history = navigationHistory
+        while let location = history.goForward() {
+            if applyNavigation(location, revealsMethod: true, resetsMethodSearch: true) {
+                navigationHistory = history
+                return
+            }
+        }
+        navigationHistory = history
     }
 
     func chooseTarget() {
@@ -177,10 +253,7 @@ final class WorkspaceModel: ObservableObject {
         analysisCache = [:]
         analysisCacheRecency = []
         resetBuildState(removingArtifact: true)
-        navigation = .target
-        selectedMethodID = nil
-        methodRevealRequest = nil
-        classSearchSelectionRequest = nil
+        resetNavigationHistory()
         resetClassBrowserQuery()
         savedProjectBaseline = nil
         replaceProjectDraft(nil)
@@ -222,7 +295,7 @@ final class WorkspaceModel: ObservableObject {
         if case .loaded(let analysis) = loadedTarget.analysisState,
             analysis.sliceIndex == sliceIndex
         {
-            navigation = .target
+            navigate(to: .target)
             return
         }
 
@@ -240,20 +313,20 @@ final class WorkspaceModel: ObservableObject {
         if case .loaded(let analysis) = loadedTarget.analysisState,
             analysis.sliceIndex == sliceIndex
         {
-            navigation = .target
+            navigate(to: .target)
             return
         }
 
         let cacheKey = analysisCacheKey(for: loadedTarget, sliceIndex: sliceIndex)
         if let cachedAnalysis = cachedAnalysis(for: cacheKey) {
             resetBuildState(removingArtifact: true)
-            navigation = .target
             let analyzedTarget = loadedTarget.replacingAnalysisState(
                 .loaded(cachedAnalysis.analysis),
                 patchabilityReport: cachedAnalysis.patchabilityReport,
                 classBrowserTargets: cachedAnalysis.classBrowserTargets
             )
             phase = .loaded(analyzedTarget)
+            resetNavigationHistory()
             replaceProjectDraft(
                 PatchProjectDraft(loadedTarget: analyzedTarget),
                 marksClean: true
@@ -263,7 +336,7 @@ final class WorkspaceModel: ObservableObject {
 
         resetBuildState(removingArtifact: true)
         analysisTask?.cancel()
-        navigation = .target
+        resetNavigationHistory()
         phase = .loaded(
             loadedTarget.replacingAnalysisState(
                 .loading(sliceIndex: sliceIndex),
@@ -321,7 +394,7 @@ final class WorkspaceModel: ObservableObject {
     func selectImage(id imageID: String) {
         guard case .loaded(let loadedTarget) = phase else { return }
         guard loadedTarget.inspection.image.id != imageID else {
-            navigation = .target
+            navigate(to: .target)
             return
         }
         guard let image = loadedTarget.images.first(where: { $0.id == imageID }) else {
@@ -347,7 +420,7 @@ final class WorkspaceModel: ObservableObject {
     private func beginSelectingImage(id imageID: String) {
         guard case .loaded(let loadedTarget) = phase else { return }
         guard loadedTarget.inspection.image.id != imageID else {
-            navigation = .target
+            navigate(to: .target)
             return
         }
         guard let image = loadedTarget.images.first(where: { $0.id == imageID }) else {
@@ -369,10 +442,7 @@ final class WorkspaceModel: ObservableObject {
 
         resetBuildState(removingArtifact: true)
         analysisTask?.cancel()
-        navigation = .target
-        selectedMethodID = nil
-        methodRevealRequest = nil
-        classSearchSelectionRequest = nil
+        resetNavigationHistory()
         resetClassBrowserQuery()
         savedProjectBaseline = nil
         replaceProjectDraft(nil)
@@ -411,6 +481,86 @@ final class WorkspaceModel: ObservableObject {
         return classBrowserTargetsByID[classID]
     }
 
+    private func applyNavigation(
+        _ location: WorkspaceNavigationLocation,
+        revealsMethod: Bool,
+        resetsMethodSearch: Bool
+    ) -> Bool {
+        guard case .loaded = phase else { return false }
+
+        switch location.destination {
+        case .target:
+            break
+        case .build:
+            guard projectDraft != nil else { return false }
+        case .objectiveCClass(let classID):
+            guard let objectiveCClass = classBrowserTargetsByID[classID] else { return false }
+            if let methodID = location.methodID,
+                !objectiveCClass.methods.contains(where: { $0.id == methodID })
+            {
+                return false
+            }
+        }
+
+        navigation = location.destination
+        selectedMethodID = location.methodID
+        methodRevealRequest = nil
+
+        if case .objectiveCClass(let classID) = location.destination {
+            if resetsMethodSearch {
+                classSearchSelectionRequest = ClassSearchSelectionRequest(
+                    classID: classID,
+                    methodSearch: ""
+                )
+            }
+            if revealsMethod, let methodID = location.methodID {
+                methodRevealRequest = MethodRevealRequest(
+                    methodID: methodID,
+                    selectsMethodAfterScrolling: false
+                )
+            }
+        } else {
+            classSearchSelectionRequest = nil
+        }
+        return true
+    }
+
+    private func recordNavigationVisit(_ location: WorkspaceNavigationLocation) {
+        guard case .loaded = phase else { return }
+        var history = navigationHistory
+        history.visit(location)
+        navigationHistory = history
+    }
+
+    private func resetNavigationHistory(to destination: WorkspaceNavigation = .target) {
+        navigation = destination
+        selectedMethodID = nil
+        methodRevealRequest = nil
+        classSearchSelectionRequest = nil
+        var history = navigationHistory
+        history.reset(to: WorkspaceNavigationLocation(destination: destination))
+        navigationHistory = history
+    }
+
+    private func navigationTitle(for location: WorkspaceNavigationLocation) -> String {
+        switch location.destination {
+        case .target:
+            return "Target Summary"
+        case .build:
+            return "Build Workspace"
+        case .objectiveCClass(let classID):
+            guard let objectiveCClass = classBrowserTargetsByID[classID] else {
+                return "Class"
+            }
+            guard let methodID = location.methodID,
+                let method = objectiveCClass.methods.first(where: { $0.id == methodID })
+            else {
+                return objectiveCClass.name
+            }
+            return "\(objectiveCClass.name) · \(method.selector)"
+        }
+    }
+
     var targetIconData: Data? {
         guard case .loaded(let loadedTarget) = phase else { return nil }
         return loadedTarget.iconData
@@ -446,7 +596,7 @@ final class WorkspaceModel: ObservableObject {
             classID: objectiveCClass.id,
             methodSearch: methodSearch
         )
-        navigation = .objectiveCClass(objectiveCClass.id)
+        navigate(to: .objectiveCClass(objectiveCClass.id))
     }
 
     func consumeClassSearchSelectionRequest(id: UUID) {
@@ -943,8 +1093,14 @@ final class WorkspaceModel: ObservableObject {
             return
         }
 
-        revealMethod(method)
-        navigation = .objectiveCClass(objectiveCClass.id)
+        let location = WorkspaceNavigationLocation(
+            destination: .objectiveCClass(objectiveCClass.id),
+            methodID: method.id
+        )
+        guard applyNavigation(location, revealsMethod: true, resetsMethodSearch: true) else {
+            return
+        }
+        recordNavigationVisit(location)
     }
 
     func revealMethod(
@@ -953,7 +1109,7 @@ final class WorkspaceModel: ObservableObject {
     ) {
         classSearchSelectionRequest = nil
         if !selectAfterScrolling {
-            selectedMethodID = method.id
+            selectMethod(id: method.id)
         }
         methodRevealRequest = MethodRevealRequest(
             methodID: method.id,
@@ -968,8 +1124,7 @@ final class WorkspaceModel: ObservableObject {
 
     func completeMethodRevealRequest(id: UUID) {
         guard let request = methodRevealRequest, request.id == id else { return }
-        selectedMethodID = request.methodID
-        methodRevealRequest = nil
+        selectMethod(id: request.methodID)
     }
 
     @discardableResult
