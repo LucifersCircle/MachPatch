@@ -84,7 +84,7 @@ final class OtoolObjectiveCParserTests: XCTestCase {
                         entsize 12 (relative)
                         count   1
                         name    0x100200000 (not in a literal section, file)
-                        types   0x100110000 B16@0:8
+                        types   0x100110000 (not in a literal section, file)
                         imp     0x1000
             """
 
@@ -92,6 +92,24 @@ final class OtoolObjectiveCParserTests: XCTestCase {
         let method = try XCTUnwrap(parsed.classes.first?.instanceMethods.first)
         XCTAssertEqual(method.selector, "")
         XCTAssertEqual(method.selectorReference, 0x100200000)
+        XCTAssertNil(method.typeEncoding)
+        XCTAssertEqual(method.typeEncodingReference, 0x100110000)
+
+        let resolved = try OtoolObjectiveCSelectorResolver().resolve(
+            parsed,
+            methodNamesOutput: """
+                Contents of (__TEXT,__objc_methname) section
+                0000000100200000  featureEnabled
+                """,
+            methodTypesOutput: """
+                Contents of (__TEXT,__objc_methtype) section
+                0000000100110000  B16@0:8
+                """,
+            selectorReferencesOutput: ""
+        )
+        let resolvedMethod = try XCTUnwrap(resolved.classes.first?.instanceMethods.first)
+        XCTAssertEqual(resolvedMethod.selector, "featureEnabled")
+        XCTAssertEqual(resolvedMethod.typeEncoding, "B16@0:8")
     }
 
     func testRejectsUnresolvableSelectorReference() throws {
