@@ -172,6 +172,8 @@ struct OtoolObjectiveCParser {
                 )
             } else if let typeEncoding = line.value(for: "types") {
                 if !typeEncoding.hasPrefix("0x") { current?.typeEncoding = typeEncoding }
+            } else if line.hasField("types"), let reference = line.lastHexValue {
+                current?.typeEncodingReference = reference
             } else if line.hasField("imp") {
                 current?.implementationAddress = line.lastHexValue.flatMap { $0 == 0 ? nil : $0 }
             }
@@ -324,12 +326,20 @@ private struct Line {
         guard hasField(name) else { return nil }
         let fields = text.split(whereSeparator: \.isWhitespace)
         guard fields.count >= 2 else { return nil }
-        let candidate = fields.last.map(String.init) ?? ""
+        let valueFields = fields.dropFirst()
+        let candidate = valueFields.last.map(String.init) ?? ""
         guard candidate != "__mh_execute_header" else { return nil }
         let pointerCandidate = candidate.trimmingCharacters(
             in: CharacterSet(charactersIn: "()")
         )
         if pointerCandidate.hasPrefix("0x") { return nil }
+
+        if valueFields.first?.hasPrefix("0x") == true,
+            valueFields.dropFirst().first?.hasPrefix("(") == true,
+            candidate.hasSuffix(")")
+        {
+            return nil
+        }
         return candidate
     }
 }

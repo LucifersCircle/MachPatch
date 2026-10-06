@@ -4,9 +4,11 @@ struct OtoolObjectiveCSelectorResolver {
     func resolve(
         _ metadata: RawObjectiveCMetadata,
         methodNamesOutput: String,
+        methodTypesOutput: String = "",
         selectorReferencesOutput: String
     ) throws -> RawObjectiveCMetadata {
-        let strings = parseMethodNames(methodNamesOutput)
+        let strings = parseStringTable(methodNamesOutput)
+        let typeStrings = parseStringTable(methodTypesOutput)
         let references = parseSelectorReferences(
             selectorReferencesOutput,
             strings: strings
@@ -17,11 +19,13 @@ struct OtoolObjectiveCSelectorResolver {
             result.classes[classIndex].instanceMethods = try resolve(
                 result.classes[classIndex].instanceMethods,
                 strings: strings,
+                typeStrings: typeStrings,
                 references: references
             )
             result.classes[classIndex].classMethods = try resolve(
                 result.classes[classIndex].classMethods,
                 strings: strings,
+                typeStrings: typeStrings,
                 references: references
             )
         }
@@ -30,6 +34,7 @@ struct OtoolObjectiveCSelectorResolver {
                 result.protocols[protocolIndex].methods[methodIndex].method = try resolve(
                     result.protocols[protocolIndex].methods[methodIndex].method,
                     strings: strings,
+                    typeStrings: typeStrings,
                     references: references
                 )
             }
@@ -38,11 +43,13 @@ struct OtoolObjectiveCSelectorResolver {
             result.categories[categoryIndex].instanceMethods = try resolve(
                 result.categories[categoryIndex].instanceMethods,
                 strings: strings,
+                typeStrings: typeStrings,
                 references: references
             )
             result.categories[categoryIndex].classMethods = try resolve(
                 result.categories[categoryIndex].classMethods,
                 strings: strings,
+                typeStrings: typeStrings,
                 references: references
             )
         }
@@ -52,38 +59,61 @@ struct OtoolObjectiveCSelectorResolver {
     private func resolve(
         _ methods: [RawObjectiveCMethod],
         strings: StringTable,
+        typeStrings: StringTable,
         references: [UInt64: String]
     ) throws -> [RawObjectiveCMethod] {
-        try methods.map { try resolve($0, strings: strings, references: references) }
+        try methods.map {
+            try resolve(
+                $0,
+                strings: strings,
+                typeStrings: typeStrings,
+                references: references
+            )
+        }
     }
 
     private func resolve(
         _ method: RawObjectiveCMethod,
         strings: StringTable,
+        typeStrings: StringTable,
         references: [UInt64: String]
     ) throws -> RawObjectiveCMethod {
-        guard method.selector.isEmpty else { return method }
-        guard let reference = method.selectorReference else {
-            throw ObjectiveCProviderError(
-                "method is missing both a selector and selector reference")
-        }
-
-        let selector =
-            references[reference]
-            ?? strings.fullAddress[reference]
-            ?? strings.lowAddress[reference & 0xFFFF_FFFF]
-        guard let selector else {
-            throw ObjectiveCProviderError(
-                "selector reference 0x\(String(reference, radix: 16)) could not be resolved"
-            )
-        }
-
         var resolved = method
-        resolved.selector = selector
+
+        if resolved.selector.isEmpty {
+            guard let reference = resolved.selectorReference else {
+                throw ObjectiveCProviderError(
+                    "method is missing both a selector and selector reference")
+            }
+
+            let selector =
+                references[reference]
+                ?? strings.fullAddress[reference]
+                ?? strings.lowAddress[reference & 0xFFFF_FFFF]
+            guard let selector else {
+                throw ObjectiveCProviderError(
+                    "selector reference 0x\(String(reference, radix: 16)) could not be resolved"
+                )
+            }
+            resolved.selector = selector
+        }
+
+        if resolved.typeEncoding == nil, let reference = resolved.typeEncodingReference {
+            let typeEncoding =
+                typeStrings.fullAddress[reference]
+                ?? typeStrings.lowAddress[reference & 0xFFFF_FFFF]
+            guard let typeEncoding else {
+                throw ObjectiveCProviderError(
+                    "method type reference 0x\(String(reference, radix: 16)) could not be resolved"
+                )
+            }
+            resolved.typeEncoding = typeEncoding
+        }
+
         return resolved
     }
 
-    private func parseMethodNames(_ output: String) -> StringTable {
+    private func parseStringTable(_ output: String) -> StringTable {
         var table = StringTable()
         for rawLine in output.split(separator: "\n") {
             let line = rawLine.trimmingCharacters(in: .whitespaces)

@@ -20,26 +20,43 @@ struct OtoolObjectiveCMetadataProvider: ObjectiveCMetadataProvider {
             slice: slice
         )
         let rawMetadata = try OtoolObjectiveCParser().parse(verboseOutput)
-        guard hasUnresolvedSelectors(rawMetadata) else { return rawMetadata }
+        let needsSelectors = hasUnresolvedSelectors(rawMetadata)
+        let needsTypeEncodings = hasUnresolvedTypeEncodings(rawMetadata)
+        guard needsSelectors || needsTypeEncodings else { return rawMetadata }
 
-        let methodNamesOutput = try runOtool(
-            arguments: ["-v", "-s", "__TEXT", "__objc_methname"],
-            executableURL: executableURL,
-            slice: slice
-        )
-        let selectorSegments = ["__DATA", "__DATA_CONST", "__AUTH", "__AUTH_CONST"]
-        var selectorReferencesOutput = ""
-        for segment in selectorSegments {
-            selectorReferencesOutput += try runOtool(
-                arguments: ["-v", "-s", segment, "__objc_selrefs"],
+        let methodNamesOutput =
+            needsSelectors
+            ? try runOtool(
+                arguments: ["-v", "-s", "__TEXT", "__objc_methname"],
                 executableURL: executableURL,
                 slice: slice
             )
+            : ""
+        let methodTypesOutput =
+            needsTypeEncodings
+            ? try runOtool(
+                arguments: ["-v", "-s", "__TEXT", "__objc_methtype"],
+                executableURL: executableURL,
+                slice: slice
+            )
+            : ""
+
+        var selectorReferencesOutput = ""
+        if needsSelectors {
+            let selectorSegments = ["__DATA", "__DATA_CONST", "__AUTH", "__AUTH_CONST"]
+            for segment in selectorSegments {
+                selectorReferencesOutput += try runOtool(
+                    arguments: ["-v", "-s", segment, "__objc_selrefs"],
+                    executableURL: executableURL,
+                    slice: slice
+                )
+            }
         }
 
         return try OtoolObjectiveCSelectorResolver().resolve(
             rawMetadata,
             methodNamesOutput: methodNamesOutput,
+            methodTypesOutput: methodTypesOutput,
             selectorReferencesOutput: selectorReferencesOutput
         )
     }
@@ -73,6 +90,24 @@ struct OtoolObjectiveCMetadataProvider: ObjectiveCMetadataProvider {
             throw ObjectiveCProviderError("otool output is not valid UTF-8")
         }
         return output
+    }
+
+    private func hasUnresolvedTypeEncodings(_ metadata: RawObjectiveCMetadata) -> Bool {
+        metadata.classes.contains {
+            ($0.instanceMethods + $0.classMethods).contains {
+                $0.typeEncoding == nil && $0.typeEncodingReference != nil
+            }
+        }
+            || metadata.protocols.contains {
+                $0.methods.contains {
+                    $0.method.typeEncoding == nil && $0.method.typeEncodingReference != nil
+                }
+            }
+            || metadata.categories.contains {
+                ($0.instanceMethods + $0.classMethods).contains {
+                    $0.typeEncoding == nil && $0.typeEncodingReference != nil
+                }
+            }
     }
 
     private func hasUnresolvedSelectors(_ metadata: RawObjectiveCMetadata) -> Bool {
