@@ -71,6 +71,29 @@ final class OtoolObjectiveCParserTests: XCTestCase {
         )
     }
 
+    func testTreatsOtoolPointerAnnotationsAsUnresolvedSelectors() throws {
+        let output = """
+            Fixture:
+            Contents of (__DATA_CONST,__objc_classlist) section
+            0000000100300000 0x100300100
+                isa        0x100300200
+                superclass 0x0 _OBJC_CLASS_$_NSObject
+                data       0x100300300
+                    name           0x100100100 FixtureManager
+                    baseMethods    0x100300400
+                        entsize 12 (relative)
+                        count   1
+                        name    0x100200000 (not in a literal section, file)
+                        types   0x100110000 B16@0:8
+                        imp     0x1000
+            """
+
+        let parsed = try OtoolObjectiveCParser().parse(output)
+        let method = try XCTUnwrap(parsed.classes.first?.instanceMethods.first)
+        XCTAssertEqual(method.selector, "")
+        XCTAssertEqual(method.selectorReference, 0x100200000)
+    }
+
     func testRejectsUnresolvableSelectorReference() throws {
         var raw = RawObjectiveCMetadata()
         raw.classes = [
