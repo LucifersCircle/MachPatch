@@ -334,7 +334,22 @@ final class RuntimeFixtureTests: XCTestCase {
                 return method
             }
         }
-        XCTFail("Missing \(className) \(selector) in runtime fixture analysis")
+        let classSelectors =
+            analysis.metadata.classes
+            .first(where: { $0.name == className })
+            .map { ($0.instanceMethods + $0.classMethods).map(\.selector).sorted() } ?? []
+        let categorySelectors =
+            analysis.metadata.categories
+            .filter { $0.className == className }
+            .flatMap { $0.instanceMethods + $0.classMethods }
+            .map(\.selector)
+            .sorted()
+        XCTFail(
+            "Missing \(className) \(selector) in runtime fixture analysis; "
+                + "backend=\(analysis.backend.rawValue); "
+                + "class selectors=\(classSelectors); category selectors=\(categorySelectors); "
+                + "notices=\(analysis.notices); warnings=\(analysis.warnings)"
+        )
         throw RuntimeFixtureTestError.missingMethod("\(className) \(selector)")
     }
 
