@@ -7,19 +7,10 @@ on:
 jobs:
   test:
     name: Build and test
-    runs-on: macos-14
+    runs-on: xcode-27
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-
-      - name: Select Xcode 16
-        run: |
-          XCODE_PATH="$(find /Applications -maxdepth 1 -type d -name 'Xcode_16*.app' -print | sort | tail -n 1)"
-          if [[ -z "$XCODE_PATH" ]]; then
-            echo "No Xcode 16 installation is available on this runner." >&2
-            exit 1
-          fi
-          sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
 
       - name: Show Swift version
         run: swift --version
