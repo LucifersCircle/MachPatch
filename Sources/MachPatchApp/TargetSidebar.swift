@@ -51,9 +51,7 @@ struct TargetSidebar: View {
                     .animation(.easeOut(duration: 0.18), value: isClassBrowserControlsPinned)
                 }
                 .onPreferenceChange(SidebarViewportHeightKey.self) { height in
-                    Task { @MainActor in
-                        sidebarViewportHeight = height
-                    }
+                    sidebarViewportHeight = height
                 }
                 .onChange(of: model.classSearch) { _, _ in
                     handleClassQueryChange(with: proxy)
