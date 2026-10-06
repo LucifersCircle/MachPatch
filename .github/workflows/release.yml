@@ -128,3 +128,14 @@ jobs:
               --title "MachPatch $VERSION" \
               --generate-notes
           fi
+
+      - name: Remove temporary CI branches
+        if: github.ref == 'refs/heads/main' && steps.publish.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for branch in fix/ci-2026-10-06 fix/swift6-zip-validator; do
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$branch" \
+              || echo "Branch $branch was already removed."
+          done
+
