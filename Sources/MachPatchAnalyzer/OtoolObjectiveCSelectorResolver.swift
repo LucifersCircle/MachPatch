@@ -34,6 +34,7 @@ struct OtoolObjectiveCSelectorResolver {
                 result.protocols[protocolIndex].methods[methodIndex].method = try resolve(
                     result.protocols[protocolIndex].methods[methodIndex].method,
                     strings: strings,
+                    typeStrings: typeStrings,
                     references: references
                 )
             }
