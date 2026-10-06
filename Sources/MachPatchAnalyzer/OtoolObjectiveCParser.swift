@@ -172,6 +172,8 @@ struct OtoolObjectiveCParser {
                 )
             } else if let typeEncoding = line.value(for: "types") {
                 if !typeEncoding.hasPrefix("0x") { current?.typeEncoding = typeEncoding }
+            } else if line.hasField("types"), let reference = line.lastHexValue {
+                current?.typeEncodingReference = reference
             } else if line.hasField("imp") {
                 current?.implementationAddress = line.lastHexValue.flatMap { $0 == 0 ? nil : $0 }
             }
