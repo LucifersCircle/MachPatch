@@ -37,7 +37,6 @@ struct RawObjectiveCMethod: Equatable {
     var selectorReference: UInt64?
     var kind: ObjectiveCMethodKind = .instance
     var typeEncoding: String?
-    var typeEncodingReference: UInt64?
     var implementationAddress: UInt64?
 }
 
