@@ -490,5 +490,3 @@ and in-app-controlled patches. Reproducible source archives and ordinary-arm64 D
 available as optional outputs.
 
 Public release readiness is governed by [docs/release-checklist.md](docs/release-checklist.md).
-
-<!-- CI diagnostic branch; removed before merge. -->
