@@ -9,10 +9,13 @@ on:
         default: 0.1.0
         type: string
   push:
+    branches:
+      - main
     tags:
       - "v*"
 
 permissions:
+  actions: write
   contents: write
 
 concurrency:
@@ -22,7 +25,7 @@ concurrency:
 jobs:
   build-release:
     name: Build arm64 DMG
-    runs-on: macos-14
+    runs-on: xcode-27
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -32,43 +35,66 @@ jobs:
         env:
           DISPATCH_VERSION: ${{ inputs.version }}
         run: |
+          plist_version="$(plutil -extract CFBundleShortVersionString raw Resources/AppIcon/Info.plist)"
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             version="${GITHUB_REF_NAME#v}"
-          else
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
             version="$DISPATCH_VERSION"
+          else
+            version="$plist_version"
           fi
           if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
             echo "Invalid release version: $version" >&2
             exit 2
           fi
-          plist_version="$(plutil -extract CFBundleShortVersionString raw Resources/AppIcon/Info.plist)"
           if [[ "$version" != "$plist_version" ]]; then
             echo "Version $version does not match Info.plist version $plist_version" >&2
             exit 3
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether this version is already released
+        id: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF_TYPE" == "branch" ]] \
+            && gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "$RELEASE_TAG already exists; skipping the automatic main-branch release build."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Show toolchain
+        if: steps.publish.outputs.skip != 'true'
         run: |
           swift --version
           xcodebuild -version
 
       - name: Check formatting
+        if: steps.publish.outputs.skip != 'true'
         run: xcrun swift-format lint --recursive --strict Sources Tests Package.swift
 
       - name: Run tests
+        if: steps.publish.outputs.skip != 'true'
         run: swift test
 
       - name: Build release DMG
+        if: steps.publish.outputs.skip != 'true'
         env:
           MACOS_ARCHITECTURE: arm64
         run: Scripts/create-release-dmg.sh dist "${{ steps.version.outputs.version }}"
 
       - name: Verify checksum
+        if: steps.publish.outputs.skip != 'true'
         working-directory: dist
         run: shasum -a 256 -c "MachPatch-${{ steps.version.outputs.version }}-macOS-arm64.dmg.sha256"
 
       - name: Upload workflow artifact
+        if: steps.publish.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: MachPatch-${{ steps.version.outputs.version }}-macOS-arm64
@@ -79,14 +105,57 @@ jobs:
           retention-days: 30
 
       - name: Publish GitHub Release assets
-        if: github.ref_type == 'tag'
+        if: steps.publish.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            "dist/MachPatch-$VERSION-macOS-arm64.dmg" \
-            "dist/MachPatch-$VERSION-macOS-arm64.dmg.sha256" \
-            --verify-tag \
-            --title "MachPatch $VERSION" \
-            --generate-notes
+          dmg="dist/MachPatch-$VERSION-macOS-arm64.dmg"
+          checksum="$dmg.sha256"
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$dmg" "$checksum" --clobber
+          elif [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            gh release create "$RELEASE_TAG" \
+              "$dmg" "$checksum" \
+              --verify-tag \
+              --title "MachPatch $VERSION" \
+              --generate-notes
+          else
+            gh release create "$RELEASE_TAG" \
+              "$dmg" "$checksum" \
+              --target "$GITHUB_SHA" \
+              --title "MachPatch $VERSION" \
+              --generate-notes
+          fi
+
+      - name: Keep only this successful release run
+        if: steps.publish.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          current_run="$GITHUB_RUN_ID"
+
+          # CI starts from the same push. Let it finish so it can verify the exact
+          # release commit before removing its run from Actions history.
+          deadline=$((SECONDS + 900))
+          while :; do
+            active="$(gh api --paginate               "repos/$GITHUB_REPOSITORY/actions/runs?per_page=100"               --jq ".workflow_runs[] | select(.id != ($current_run | tonumber) and .status != \"completed\") | .id"               | head -n 1)"
+            [[ -z "$active" ]] && break
+            if (( SECONDS >= deadline )); then
+              echo "Timed out waiting for workflow run $active to complete." >&2
+              exit 1
+            fi
+            sleep 10
+          done
+
+          gh api --paginate             "repos/$GITHUB_REPOSITORY/actions/runs?per_page=100"             --jq '.workflow_runs[].id' |
+          while read -r id; do
+            [[ -n "$id" ]] || continue
+            [[ "$id" == "$current_run" ]] && continue
+            echo "Deleting workflow run $id"
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/runs/$id"
+          done
+
