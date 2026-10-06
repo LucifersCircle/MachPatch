@@ -152,9 +152,11 @@ Scripts/create-release-dmg.sh dist 0.1.0
 open dist/MachPatch-0.1.0-macOS-arm64.dmg
 ```
 
-The **Release** GitHub Actions workflow can be run manually to prove the build and retain its DMG
-as a workflow artifact. Pushing a tag matching the bundle version, such as `v0.1.0`, also creates a
-GitHub Release with the DMG and SHA-256 attached directly.
+The **Release** GitHub Actions workflow builds on GitHub's Xcode 27 arm64 runner. The first push
+to `main` for a bundle version creates the matching GitHub Release (for example, `v0.1.0`) with
+the DMG and SHA-256 attached directly. Later pushes with the same bundle version skip the automatic
+release build. A manual workflow run rebuilds and refreshes that version's assets, and pushing the
+matching version tag remains supported as an explicit release trigger.
 
 ## Command-line interface
 
